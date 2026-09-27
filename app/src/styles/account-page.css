@@ -1,0 +1,52 @@
+/* Account & billing page (Epic 6.8) — plain, list-shaped, single-column; this is a utility page, not a marketing surface. */
+
+.account-page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--forge-space-6) var(--forge-space-4);
+  color: var(--forge-slate-100);
+}
+
+.account-page__back {
+  background: none;
+  border: none;
+  color: var(--forge-slate-300);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: var(--forge-space-4);
+}
+
+.account-page h1 {
+  margin: 0 0 var(--forge-space-1);
+}
+
+.account-page__email {
+  color: var(--forge-slate-300);
+  margin: 0 0 var(--forge-space-5);
+}
+
+.account-page__section {
+  padding: var(--forge-space-4) 0;
+  border-top: 1px solid var(--forge-slate-700, #334155);
+}
+
+.account-page__section h2 {
+  margin: 0 0 var(--forge-space-2);
+  font-size: 1.1rem;
+}
+
+.account-page__empty {
+  color: var(--forge-slate-300);
+}
+
+.account-page__tiers {
+  margin: 0;
+  padding-left: var(--forge-space-4);
+}
+
+.account-page__cancel-message {
+  margin-top: var(--forge-space-2);
+  color: var(--forge-slate-300);
+  font-size: 0.9rem;
+}

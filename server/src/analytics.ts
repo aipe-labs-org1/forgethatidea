@@ -100,6 +100,18 @@ export interface BuildSucceededEvent {
   repairRounds: number;
 }
 
+/**
+ * A user has asked for a full export of their account data (Epic 6.8,
+ * #104's "session/data export request path") — logged so the request is
+ * durably recorded and actionable (a real fulfillment pipeline that
+ * assembles and delivers the actual data dump is a separate, larger
+ * effort; this is the "a path exists to request it" half).
+ */
+export interface DataExportRequestedEvent {
+  type: 'data_export_requested';
+  userId: string;
+}
+
 export type AnalyticsEvent =
   | PhaseEnteredEvent
   | RefinementUsedEvent
@@ -108,7 +120,8 @@ export type AnalyticsEvent =
   | ContentScreenedEvent
   | GateShownEvent
   | BuildFailedEvent
-  | BuildSucceededEvent;
+  | BuildSucceededEvent
+  | DataExportRequestedEvent;
 
 export interface AnalyticsLogger {
   info(obj: Record<string, unknown>, msg?: string): void;

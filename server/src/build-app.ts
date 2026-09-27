@@ -109,6 +109,7 @@ import {
   type SubscriptionCancelClient,
 } from './subscription-cancellation.js';
 import { registerSubscriptionCancellationRoutes } from './routes/subscription-cancellation.js';
+import { registerAccountRoutes } from './routes/account.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -488,6 +489,10 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
     entitlements,
   });
   registerSubscriptionCancellationRoutes(app, authStore, cancellationTool);
+
+  // Account data-export request (Epic 6.8, #104): logs the request
+  // durably via the same analyticsLogger every other tracked event uses.
+  registerAccountRoutes(app, authStore, analyticsLogger);
 
   // Stripe webhooks (Epic 6.2): only registered when a real verifier +
   // secret are available — unlike checkout, there's no meaningful

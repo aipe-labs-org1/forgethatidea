@@ -515,3 +515,22 @@ export async function getEntitlements(): Promise<{ owned: TierId[] }> {
   const res = await fetch('/api/entitlements', { credentials: 'include' });
   return res.json();
 }
+
+export type CancelSubscriptionResponse =
+  | { ok: true; cancelAtPeriodEnd: boolean; currentPeriodEnd: number; policy: string }
+  | { ok: false; error: string; details?: string };
+
+/** Schedules cancel-at-period-end for the user's app-refinement top-up subscription (Epic 6.7). */
+export async function cancelSubscription(): Promise<CancelSubscriptionResponse> {
+  const res = await fetch('/api/subscription/cancel', { method: 'POST', credentials: 'include' });
+  return res.json();
+}
+
+/** Records a request to export all of the user's account data (Epic 6.8) — a request path, not an instant download. */
+export async function requestDataExport(): Promise<{ ok: boolean }> {
+  const res = await fetch('/api/account/export-request', {
+    method: 'POST',
+    credentials: 'include',
+  });
+  return res.json();
+}

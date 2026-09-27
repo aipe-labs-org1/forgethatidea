@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getMe, signout, type ApiSession } from '../api.js';
 import '../styles/account-menu.css';
 
@@ -36,6 +37,7 @@ export function AccountMenu({
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     getMe().then((result) => {
@@ -104,6 +106,17 @@ export function AccountMenu({
             }}
           >
             + New project
+          </button>
+
+          <button
+            type="button"
+            className="account-menu__new-project"
+            onClick={() => {
+              navigate('/account');
+              setOpen(false);
+            }}
+          >
+            Account &amp; billing
           </button>
 
           <button

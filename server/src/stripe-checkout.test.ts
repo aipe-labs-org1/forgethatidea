@@ -32,6 +32,7 @@ describe('createCheckoutSessionTool (#98)', () => {
     const result = await tool.createCheckoutSession({
       tierId: 'spec-pack',
       userId: 'user-1',
+      customerEmail: 'buyer@example.com',
       successUrl: 'https://forge.test/success',
       cancelUrl: 'https://forge.test/cancel',
     });
@@ -46,11 +47,37 @@ describe('createCheckoutSessionTool (#98)', () => {
         tierId: 'spec-pack',
         priceCents: catalog.find((p) => p.id === 'spec-pack')!.priceCents,
         userId: 'user-1',
+        customerEmail: 'buyer@example.com',
         successUrl: 'https://forge.test/success',
         cancelUrl: 'https://forge.test/cancel',
+        // Stripe checkout-session options (#102): automatic tax + VAT ID
+        // collection so UK/EU buyers see VAT-inclusive pricing and can
+        // supply a business VAT ID, and a receipt is emailed automatically
+        // to customerEmail — real behavior only takes effect once the real
+        // SDK-backed StripeClient (still deferred, no live key) actually
+        // wraps these into stripe.checkout.sessions.create's real options.
+        automaticTax: true,
+        taxIdCollectionEnabled: true,
       }),
     );
     expect(client.createSubscriptionCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it('creates a checkout session without a customerEmail (optional)', async () => {
+    const client = fakeStripeClient();
+    const tool = createCheckoutSessionTool({ client, catalog });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ customerEmail: undefined }),
+    );
   });
 
   it('creates a subscription checkout session for the subscription tier', async () => {

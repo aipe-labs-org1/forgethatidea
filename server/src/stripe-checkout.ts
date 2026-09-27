@@ -5,20 +5,37 @@ export interface StripeCheckoutSession {
   url: string;
 }
 
+/**
+ * Stripe checkout-session options shared by both flows (Epic 6.6, #102):
+ * `automaticTax`/`taxIdCollectionEnabled` map directly to Stripe's own
+ * `automatic_tax: { enabled }` / `tax_id_collection: { enabled }` session
+ * params — automatic tax is what gives UK/EU buyers VAT-inclusive pricing
+ * at checkout, and tax ID collection is the "capture a business VAT ID
+ * when provided" criterion. `customerEmail` maps to Stripe's own
+ * `customer_email`, which is also what drives Stripe's automatic receipt
+ * email on successful payment — no separate "send a receipt" call is
+ * needed once this is wired into a real `checkout.sessions.create`.
+ */
 export interface CreateOneOffCheckoutSessionInput {
   tierId: TierId;
   priceCents: number;
   userId: string;
+  customerEmail?: string;
   successUrl: string;
   cancelUrl: string;
+  automaticTax: true;
+  taxIdCollectionEnabled: true;
 }
 
 export interface CreateSubscriptionCheckoutSessionInput {
   tierId: TierId;
   priceCents: number;
   userId: string;
+  customerEmail?: string;
   successUrl: string;
   cancelUrl: string;
+  automaticTax: true;
+  taxIdCollectionEnabled: true;
 }
 
 /**
@@ -63,6 +80,8 @@ export interface CreateCheckoutSessionToolDeps {
 export interface CreateCheckoutSessionInput {
   tierId: string;
   userId: string;
+  /** The buyer's account email (Epic 6.6, #102) — passed through as Stripe's `customer_email`, which is also what drives Stripe's own automatic receipt-on-purchase email. Optional so a caller without it handy (e.g. a system-initiated session) doesn't need to look it up first. */
+  customerEmail?: string;
   successUrl: string;
   cancelUrl: string;
 }
@@ -109,8 +128,11 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
       tierId: product.id,
       priceCents: product.priceCents,
       userId: input.userId,
+      customerEmail: input.customerEmail,
       successUrl: input.successUrl,
       cancelUrl: input.cancelUrl,
+      automaticTax: true as const,
+      taxIdCollectionEnabled: true as const,
     };
 
     try {

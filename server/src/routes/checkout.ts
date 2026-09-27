@@ -39,9 +39,15 @@ export function registerCheckoutRoutes(
       return reply.status(400).send({ error: 'validation_failed' });
     }
 
+    // customerEmail (#102) drives Stripe's automatic receipt-on-purchase
+    // email — read from the authenticated user's own account rather than
+    // trusting anything client-supplied for it.
+    const user = await authStore.findUserById(request.userId!);
+
     const result = await checkoutTool.createCheckoutSession({
       tierId: parsed.data.tierId,
       userId: request.userId!,
+      customerEmail: user?.email,
       successUrl: parsed.data.successUrl,
       cancelUrl: parsed.data.cancelUrl,
     });

@@ -7,6 +7,10 @@ import { createInMemoryAuthStore } from '../auth/auth-store.js';
 import { createCheckoutSessionTool, type StripeClient } from '../stripe-checkout.js';
 import { getTierCatalog } from '../tier-catalog.js';
 import { loadEnv } from '../env.js';
+import {
+  createDisclaimerAcceptanceService,
+  createInMemoryDisclaimerAcceptanceStore,
+} from '../disclaimer-acceptance.js';
 
 function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
   return {
@@ -28,13 +32,16 @@ async function buildTestApp(client: StripeClient = fakeStripeClient()) {
   const authStore = createInMemoryAuthStore();
   const env = loadEnv({ NODE_ENV: 'test' } as NodeJS.ProcessEnv);
   const catalog = getTierCatalog(env);
-  const checkoutTool = createCheckoutSessionTool({ client, catalog });
+  const disclaimerAcceptance = createDisclaimerAcceptanceService({
+    store: createInMemoryDisclaimerAcceptanceStore(),
+  });
+  const checkoutTool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
 
   registerAuthRoutes(app, authStore);
   registerCheckoutRoutes(app, authStore, checkoutTool);
 
   await app.ready();
-  return { app };
+  return { app, disclaimerAcceptance };
 }
 
 function extractCookie(res: { headers: Record<string, unknown> }): string {
@@ -116,6 +123,25 @@ describe('checkout route (#98)', () => {
     expect(client.createOneOffCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({ customerEmail: 'receipt-test@example.com' }),
     );
+  });
+
+  it('rejects a financial-pack checkout with 403 when the disclaimer has not been accepted (#105)', async () => {
+    const { app } = await buildTestApp();
+    const authCookie = await signUpAndGetCookie(app);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/checkout',
+      headers: { cookie: authCookie },
+      payload: {
+        tierId: 'financial-pack',
+        successUrl: 'https://forge.test/success',
+        cancelUrl: 'https://forge.test/cancel',
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'disclaimer_not_accepted' });
   });
 
   it('rejects an unknown tier with 400', async () => {

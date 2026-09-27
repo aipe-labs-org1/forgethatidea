@@ -6,6 +6,14 @@ import {
 } from './stripe-checkout.js';
 import { getTierCatalog } from './tier-catalog.js';
 import { loadEnv } from './env.js';
+import {
+  createDisclaimerAcceptanceService,
+  createInMemoryDisclaimerAcceptanceStore,
+} from './disclaimer-acceptance.js';
+import {
+  FINANCIAL_PACK_DISCLAIMER_ID,
+  FINANCIAL_PACK_DISCLAIMER_VERSION,
+} from './financial-pack-disclaimer.js';
 
 function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
   return {
@@ -23,6 +31,11 @@ function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
 
 const env = loadEnv({ NODE_ENV: 'test' } as NodeJS.ProcessEnv);
 const catalog = getTierCatalog(env);
+
+function disclaimerService() {
+  const store = createInMemoryDisclaimerAcceptanceStore();
+  return createDisclaimerAcceptanceService({ store });
+}
 
 describe('createCheckoutSessionTool (#98)', () => {
   it('creates a one-off checkout session for a one-off tier', async () => {
@@ -137,5 +150,83 @@ describe('createCheckoutSessionTool (#98)', () => {
     if (isCheckoutSessionFailure(result) && result.error === 'checkout_session_failed') {
       expect(result.details).toContain('stripe API unreachable');
     }
+  });
+
+  it('rejects a financial-pack checkout when the user has not accepted the current disclaimer version (#105)', async () => {
+    const client = fakeStripeClient();
+    const disclaimerAcceptance = disclaimerService();
+    const tool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'financial-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(isCheckoutSessionFailure(result)).toBe(true);
+    if (isCheckoutSessionFailure(result)) {
+      expect(result.error).toBe('disclaimer_not_accepted');
+    }
+    expect(client.createOneOffCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it('allows a financial-pack checkout once the user has accepted the current disclaimer version', async () => {
+    const client = fakeStripeClient();
+    const disclaimerAcceptance = disclaimerService();
+    await disclaimerAcceptance.recordAcceptance(
+      'user-1',
+      FINANCIAL_PACK_DISCLAIMER_ID,
+      FINANCIAL_PACK_DISCLAIMER_VERSION,
+    );
+    const tool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'financial-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledOnce();
+  });
+
+  it('requires re-acceptance for financial-pack checkout after the disclaimer version changes', async () => {
+    const client = fakeStripeClient();
+    const disclaimerAcceptance = disclaimerService();
+    await disclaimerAcceptance.recordAcceptance(
+      'user-1',
+      FINANCIAL_PACK_DISCLAIMER_ID,
+      'stale-version',
+    );
+    const tool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'financial-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(isCheckoutSessionFailure(result)).toBe(true);
+    if (isCheckoutSessionFailure(result)) {
+      expect(result.error).toBe('disclaimer_not_accepted');
+    }
+  });
+
+  it('never gates other tiers behind the financial-pack disclaimer', async () => {
+    const client = fakeStripeClient();
+    const disclaimerAcceptance = disclaimerService();
+    const tool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

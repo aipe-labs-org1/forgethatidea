@@ -1,4 +1,9 @@
 import { isTierId, type TierId, type TierProduct } from './tier-catalog.js';
+import type { createDisclaimerAcceptanceService } from './disclaimer-acceptance.js';
+import {
+  FINANCIAL_PACK_DISCLAIMER_ID,
+  FINANCIAL_PACK_DISCLAIMER_VERSION,
+} from './financial-pack-disclaimer.js';
 
 export interface StripeCheckoutSession {
   id: string;
@@ -75,6 +80,14 @@ export function createUnconfiguredStripeClient(): StripeClient {
 export interface CreateCheckoutSessionToolDeps {
   client: StripeClient;
   catalog: TierProduct[];
+  /**
+   * The disclaimer-acceptance gate (Epic 6.9, #105) — required so
+   * financial-pack checkout can enforce "purchase possible only after
+   * acceptance." Optional here (rather than required) only so existing
+   * callers/tests for other tiers don't need to construct one when they
+   * never exercise the gated path; build-app.ts always wires a real one.
+   */
+  disclaimerAcceptance?: ReturnType<typeof createDisclaimerAcceptanceService>;
 }
 
 export interface CreateCheckoutSessionInput {
@@ -89,6 +102,7 @@ export interface CreateCheckoutSessionInput {
 export type CheckoutSessionResult =
   | { ok: true; sessionId: string; url: string }
   | { ok: false; error: 'unknown_tier' }
+  | { ok: false; error: 'disclaimer_not_accepted'; disclaimerId: string; version: string }
   | { ok: false; error: 'checkout_session_failed'; details: string };
 
 /**
@@ -110,7 +124,7 @@ export function isCheckoutSessionFailure(
  * catalog (#97) so a request can't smuggle in an arbitrary amount.
  */
 export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
-  const { client, catalog } = deps;
+  const { client, catalog, disclaimerAcceptance } = deps;
 
   async function createCheckoutSession(
     input: CreateCheckoutSessionInput,
@@ -122,6 +136,24 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
     const product = catalog.find((p) => p.id === input.tierId);
     if (!product) {
       return { ok: false, error: 'unknown_tier' };
+    }
+
+    // Financial pack assumptions/not-advice gate (Epic 6.9, #105): the
+    // only tier this applies to — never invented for any other product.
+    if (product.id === 'financial-pack' && disclaimerAcceptance) {
+      const accepted = await disclaimerAcceptance.hasAccepted(
+        input.userId,
+        FINANCIAL_PACK_DISCLAIMER_ID,
+        FINANCIAL_PACK_DISCLAIMER_VERSION,
+      );
+      if (!accepted) {
+        return {
+          ok: false,
+          error: 'disclaimer_not_accepted',
+          disclaimerId: FINANCIAL_PACK_DISCLAIMER_ID,
+          version: FINANCIAL_PACK_DISCLAIMER_VERSION,
+        };
+      }
     }
 
     const sessionInput = {

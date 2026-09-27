@@ -110,6 +110,12 @@ import {
 } from './subscription-cancellation.js';
 import { registerSubscriptionCancellationRoutes } from './routes/subscription-cancellation.js';
 import { registerAccountRoutes } from './routes/account.js';
+import {
+  createDisclaimerAcceptanceService,
+  createInMemoryDisclaimerAcceptanceStore,
+  type DisclaimerAcceptanceStore,
+} from './disclaimer-acceptance.js';
+import { registerDisclaimerAcceptanceRoutes } from './routes/disclaimer-acceptance.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -170,6 +176,8 @@ export interface BuildAppDeps {
   entitlementStore?: EntitlementStore;
   /** Subscription-cancel client (Epic 6.7). Defaults to a real SDK-backed client keyed by env, or an unconfigured stub. */
   subscriptionCancelClient?: SubscriptionCancelClient;
+  /** Disclaimer-acceptance audit ledger (Epic 6.9). Defaults to in-memory; swap for DB-backed once durability across restarts is needed. */
+  disclaimerAcceptanceStore?: DisclaimerAcceptanceStore;
 }
 
 /**
@@ -461,7 +469,21 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   // end to end (see this PR's description).
   const stripeClient = deps.stripeClient ?? createUnconfiguredStripeClient();
   const tierCatalog = getTierCatalog(env);
-  const checkoutTool = createCheckoutSessionTool({ client: stripeClient, catalog: tierCatalog });
+
+  // Financial-pack disclaimer acceptance (Epic 6.9, #105): built before the
+  // checkout tool since it gates financial-pack checkout directly.
+  const disclaimerAcceptanceStore =
+    deps.disclaimerAcceptanceStore ?? createInMemoryDisclaimerAcceptanceStore();
+  const disclaimerAcceptance = createDisclaimerAcceptanceService({
+    store: disclaimerAcceptanceStore,
+  });
+  registerDisclaimerAcceptanceRoutes(app, authStore, disclaimerAcceptance);
+
+  const checkoutTool = createCheckoutSessionTool({
+    client: stripeClient,
+    catalog: tierCatalog,
+    disclaimerAcceptance,
+  });
   registerCheckoutRoutes(app, authStore, checkoutTool);
 
   // Entitlements service (Epic 6.4): the single source of truth every gate

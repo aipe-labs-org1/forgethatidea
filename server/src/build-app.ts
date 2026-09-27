@@ -103,6 +103,12 @@ import {
 } from './entitlements.js';
 import { createEntitlementWebhookHandlers } from './entitlement-webhook-handlers.js';
 import { registerEntitlementsRoutes } from './routes/entitlements.js';
+import {
+  createSubscriptionCancellationTool,
+  createUnconfiguredSubscriptionCancelClient,
+  type SubscriptionCancelClient,
+} from './subscription-cancellation.js';
+import { registerSubscriptionCancellationRoutes } from './routes/subscription-cancellation.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -161,6 +167,8 @@ export interface BuildAppDeps {
   stripeEventHandlers?: Record<string, StripeEventHandler>;
   /** Entitlement audit ledger (Epic 6.4). Defaults to in-memory; swap for DB-backed once durability across restarts is needed. */
   entitlementStore?: EntitlementStore;
+  /** Subscription-cancel client (Epic 6.7). Defaults to a real SDK-backed client keyed by env, or an unconfigured stub. */
+  subscriptionCancelClient?: SubscriptionCancelClient;
 }
 
 /**
@@ -467,6 +475,19 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   // user owns after returning from checkout, without a full session
   // refetch or page reload.
   registerEntitlementsRoutes(app, authStore, entitlements);
+
+  // Self-serve subscription cancellation (Epic 6.7, #103): registered
+  // unconditionally like checkout — without a real STRIPE_SECRET_KEY,
+  // deps.subscriptionCancelClient defaults to the unconfigured stub, so
+  // the route exists and returns a clear cancellation_failed rather than
+  // 404ing.
+  const subscriptionCancelClient =
+    deps.subscriptionCancelClient ?? createUnconfiguredSubscriptionCancelClient();
+  const cancellationTool = createSubscriptionCancellationTool({
+    client: subscriptionCancelClient,
+    entitlements,
+  });
+  registerSubscriptionCancellationRoutes(app, authStore, cancellationTool);
 
   // Stripe webhooks (Epic 6.2): only registered when a real verifier +
   // secret are available — unlike checkout, there's no meaningful

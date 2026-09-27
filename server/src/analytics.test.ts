@@ -166,6 +166,17 @@ describe('emitAnalyticsEvent (#42)', () => {
     );
   });
 
+  it('logs a data_export_requested event with the requesting userId (#104)', () => {
+    const logger = { info: vi.fn() };
+
+    emitAnalyticsEvent(logger, { type: 'data_export_requested', userId: 'user-1' });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { analytics_event: true, type: 'data_export_requested', userId: 'user-1' },
+      'analytics.data_export_requested',
+    );
+  });
+
   it('never includes anything beyond sessionId, event-specific structural fields, and the type', () => {
     const logger = { info: vi.fn() };
 

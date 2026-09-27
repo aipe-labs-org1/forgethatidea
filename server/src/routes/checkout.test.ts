@@ -45,11 +45,14 @@ function extractCookie(res: { headers: Record<string, unknown> }): string {
   return match[1]!;
 }
 
-async function signUpAndGetCookie(app: Awaited<ReturnType<typeof buildTestApp>>['app']) {
+async function signUpAndGetCookie(
+  app: Awaited<ReturnType<typeof buildTestApp>>['app'],
+  email = `u${Math.random()}@example.com`,
+) {
   const res = await app.inject({
     method: 'POST',
     url: '/api/auth/signup',
-    payload: { email: `u${Math.random()}@example.com`, password: 'correct horse battery staple' },
+    payload: { email, password: 'correct horse battery staple' },
   });
   return extractCookie(res);
 }
@@ -92,6 +95,27 @@ describe('checkout route (#98)', () => {
       sessionId: 'cs_test_spec-pack',
       url: 'https://checkout.stripe.com/test/spec-pack',
     });
+  });
+
+  it("passes the signed-in user's own email through as customerEmail (drives Stripe's automatic receipt, #102)", async () => {
+    const client = fakeStripeClient();
+    const { app } = await buildTestApp(client);
+    const authCookie = await signUpAndGetCookie(app, 'receipt-test@example.com');
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/checkout',
+      headers: { cookie: authCookie },
+      payload: {
+        tierId: 'spec-pack',
+        successUrl: 'https://forge.test/success',
+        cancelUrl: 'https://forge.test/cancel',
+      },
+    });
+
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ customerEmail: 'receipt-test@example.com' }),
+    );
   });
 
   it('rejects an unknown tier with 400', async () => {

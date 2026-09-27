@@ -76,4 +76,31 @@ describe('entitlement webhook handlers (#100)', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('stores the Stripe subscription id (not the checkout session id) as the grant reference for a subscription-mode session (#103)', async () => {
+    const entitlements = service();
+    const handlers = createEntitlementWebhookHandlers({ entitlements });
+
+    await handlers['checkout.session.completed']!({
+      id: 'cs_test_1',
+      subscription: 'sub_abc123',
+      metadata: { userId: 'user-1', tierId: 'app-refinement-topup' },
+    });
+
+    expect(await entitlements.findGrantReference('user-1', 'app-refinement-topup')).toBe(
+      'sub_abc123',
+    );
+  });
+
+  it('falls back to the session id as the grant reference for a one-off (non-subscription) session', async () => {
+    const entitlements = service();
+    const handlers = createEntitlementWebhookHandlers({ entitlements });
+
+    await handlers['checkout.session.completed']!({
+      id: 'cs_test_1',
+      metadata: { userId: 'user-1', tierId: 'spec-pack' },
+    });
+
+    expect(await entitlements.findGrantReference('user-1', 'spec-pack')).toBe('cs_test_1');
+  });
 });

@@ -102,6 +102,18 @@ describe('entitlements service (#100)', () => {
     await service.revoke('user-1', 'spec-pack', { source: 'refund', reference: 're_1' });
     expect(await service.hasEntitlement('user-1', 'spec-pack')).toBe(false);
   });
+
+  it('exposes findGrantReference for looking up the Stripe subscription id behind a granted tier (#103)', async () => {
+    const store = createInMemoryEntitlementStore();
+    const service = createEntitlementsService({ store });
+
+    await service.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_123',
+    });
+
+    expect(await service.findGrantReference('user-1', 'app-refinement-topup')).toBe('sub_123');
+  });
 });
 
 describe('createInMemoryEntitlementStore (#100)', () => {
@@ -112,12 +124,41 @@ describe('createInMemoryEntitlementStore (#100)', () => {
   it('records grant and revoke as separate audit entries rather than overwriting', async () => {
     const store = createInMemoryEntitlementStore();
 
-    await store.grant('user-1', 'spec-pack', { source: 'purchase', reference: 'cs_1' });
+    await store.grant('user-1', 'spec-pack', { source: 'purchase', reference: 're_1' });
     await store.revoke('user-1', 'spec-pack', { source: 'refund', reference: 're_1' });
 
     const records = await store.listByUser('user-1');
     expect(records).toHaveLength(2);
     expect(records[0]).toMatchObject({ tierId: 'spec-pack', action: 'grant' });
     expect(records[1]).toMatchObject({ tierId: 'spec-pack', action: 'revoke' });
+  });
+});
+
+describe('findLatestGrantReference (#103)', () => {
+  it('returns the reference of the most recent grant for a tier the user owns', async () => {
+    const store = createInMemoryEntitlementStore();
+
+    await store.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_first',
+    });
+    await store.revoke('user-1', 'app-refinement-topup', {
+      source: 'subscription_cancel',
+      reference: 'sub_first',
+    });
+    await store.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_second',
+    });
+
+    const reference = await store.findLatestGrantReference('user-1', 'app-refinement-topup');
+    expect(reference).toBe('sub_second');
+  });
+
+  it('returns null when the user never had this tier granted', async () => {
+    const store = createInMemoryEntitlementStore();
+
+    const reference = await store.findLatestGrantReference('user-1', 'app-refinement-topup');
+    expect(reference).toBeNull();
   });
 });

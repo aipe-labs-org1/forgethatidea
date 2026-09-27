@@ -39,10 +39,19 @@ export function createEntitlementWebhookHandlers(
   return {
     'checkout.session.completed': async (object) => {
       const { userId, tierId } = readMetadata(object);
-      await entitlements.grant(userId, tierId, {
-        source: 'purchase',
-        reference: String(object.id),
-      });
+      // A subscription-mode session (the app-refinement top-up) carries
+      // Stripe's own `subscription` id on the completed session — store
+      // that as the reference instead of the session id, since that's what
+      // a later self-serve cancel (#103) actually needs to call
+      // stripe.subscriptions.cancel on. A one-off session has no
+      // `subscription` field, so it falls back to the session id, same as
+      // before.
+      const subscriptionId = object.subscription;
+      const reference =
+        typeof subscriptionId === 'string' && subscriptionId.length > 0
+          ? subscriptionId
+          : String(object.id);
+      await entitlements.grant(userId, tierId, { source: 'purchase', reference });
     },
     'charge.refunded': async (object) => {
       const { userId, tierId } = readMetadata(object);

@@ -30,6 +30,13 @@ export interface EntitlementStore {
   listOwnedTiers(userId: string): Promise<TierId[]>;
   /** Full chronological audit trail for this user — every grant and revoke, never collapsed. */
   listByUser(userId: string): Promise<EntitlementRecord[]>;
+  /**
+   * The most recent grant's reference for this user+tier, or null if never
+   * granted (Epic 6.7, #103) — for a subscription tier this is the Stripe
+   * subscription id, which is what a self-serve cancel needs to call
+   * `stripe.subscriptions.cancel` on the right subscription.
+   */
+  findLatestGrantReference(userId: string, tierId: TierId): Promise<string | null>;
 }
 
 export function createInMemoryEntitlementStore(): EntitlementStore {
@@ -53,6 +60,13 @@ export function createInMemoryEntitlementStore(): EntitlementStore {
     },
     async listByUser(userId) {
       return records.filter((r) => r.userId === userId);
+    },
+    async findLatestGrantReference(userId, tierId) {
+      const grants = records.filter(
+        (r) => r.userId === userId && r.tierId === tierId && r.action === 'grant',
+      );
+      const latest = grants[grants.length - 1];
+      return latest?.reference ?? null;
     },
   };
 }
@@ -114,5 +128,9 @@ export function createEntitlementsService(deps: EntitlementsServiceDeps) {
     cache.delete(userId);
   }
 
-  return { hasEntitlement, listEntitlements, grant, revoke };
+  async function findGrantReference(userId: string, tierId: TierId): Promise<string | null> {
+    return store.findLatestGrantReference(userId, tierId);
+  }
+
+  return { hasEntitlement, listEntitlements, grant, revoke, findGrantReference };
 }

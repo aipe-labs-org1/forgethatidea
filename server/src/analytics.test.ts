@@ -185,6 +185,7 @@ describe('emitAnalyticsEvent (#42)', () => {
       userId: 'user-1',
       tierId: 'spec-pack',
       surface: 'refinement_gate',
+      cohort: 'control',
     });
 
     expect(logger.info).toHaveBeenCalledWith(
@@ -194,12 +195,13 @@ describe('emitAnalyticsEvent (#42)', () => {
         userId: 'user-1',
         tierId: 'spec-pack',
         surface: 'refinement_gate',
+        cohort: 'control',
       },
       'analytics.checkout_started',
     );
   });
 
-  it('logs a purchase_completed event with userId/tierId/amountCents (#108)', () => {
+  it('logs a purchase_completed event with userId/tierId/amountCents/cohort (#108, #110)', () => {
     const logger = { info: vi.fn() };
 
     emitAnalyticsEvent(logger, {
@@ -207,6 +209,7 @@ describe('emitAnalyticsEvent (#42)', () => {
       userId: 'user-1',
       tierId: 'spec-pack',
       amountCents: 1900,
+      cohort: 'control',
     });
 
     expect(logger.info).toHaveBeenCalledWith(
@@ -216,6 +219,7 @@ describe('emitAnalyticsEvent (#42)', () => {
         userId: 'user-1',
         tierId: 'spec-pack',
         amountCents: 1900,
+        cohort: 'control',
       },
       'analytics.purchase_completed',
     );

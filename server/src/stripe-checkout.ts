@@ -8,6 +8,12 @@ import {
   isVelocityLimitRejected,
   type createPurchaseVelocityLimiter,
 } from './purchase-velocity-limiter.js';
+import type { createEntitlementsService } from './entitlements.js';
+import {
+  assignCohort,
+  applyPricingExperiment,
+  type PricingExperimentConfig,
+} from './pricing-experiments.js';
 
 export interface StripeCheckoutSession {
   id: string;
@@ -34,6 +40,8 @@ export interface CreateOneOffCheckoutSessionInput {
   cancelUrl: string;
   automaticTax: true;
   taxIdCollectionEnabled: true;
+  /** The pricing-experiment cohort this session was created under (Epic 6.13, #110) — maps into Stripe's real `metadata.cohort`, alongside userId/tierId, so the checkout-completed webhook can read it back onto the entitlement grant and the purchase_completed analytics event. */
+  cohort: string;
 }
 
 export interface CreateSubscriptionCheckoutSessionInput {
@@ -45,6 +53,7 @@ export interface CreateSubscriptionCheckoutSessionInput {
   cancelUrl: string;
   automaticTax: true;
   taxIdCollectionEnabled: true;
+  cohort: string;
 }
 
 /**
@@ -99,6 +108,22 @@ export interface CreateCheckoutSessionToolDeps {
    * wires a real one.
    */
   velocityLimiter?: ReturnType<typeof createPurchaseVelocityLimiter>;
+  /**
+   * Purchase-price history (Epic 6.13, #110's "purchasers always honoured
+   * at purchase price") — optional for the same reason as the other
+   * optional deps above; build-app.ts always wires a real one. Only ever
+   * consulted for the resubscribable subscription tier (see
+   * createCheckoutSession below) — a one-off tier can't be re-purchased
+   * once owned, so there's no "different price on repurchase" scenario for
+   * it to guard against.
+   */
+  entitlements?: ReturnType<typeof createEntitlementsService>;
+  /**
+   * Pricing-experiment config (Epic 6.13, #110) — optional; without one,
+   * every user is assigned the implicit 'control' cohort and the base
+   * catalog price/copy is used unchanged.
+   */
+  pricingExperiment?: PricingExperimentConfig;
 }
 
 export interface CreateCheckoutSessionInput {
@@ -111,7 +136,7 @@ export interface CreateCheckoutSessionInput {
 }
 
 export type CheckoutSessionResult =
-  | { ok: true; sessionId: string; url: string }
+  | { ok: true; sessionId: string; url: string; cohort: string }
   | { ok: false; error: 'unknown_tier' }
   | { ok: false; error: 'disclaimer_not_accepted'; disclaimerId: string; version: string }
   | { ok: false; error: 'velocity_limit_exceeded'; retryAfterMs: number }
@@ -136,7 +161,14 @@ export function isCheckoutSessionFailure(
  * catalog (#97) so a request can't smuggle in an arbitrary amount.
  */
 export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
-  const { client, catalog, disclaimerAcceptance, velocityLimiter } = deps;
+  const {
+    client,
+    catalog,
+    disclaimerAcceptance,
+    velocityLimiter,
+    entitlements,
+    pricingExperiment,
+  } = deps;
 
   async function createCheckoutSession(
     input: CreateCheckoutSessionInput,
@@ -145,7 +177,17 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
       return { ok: false, error: 'unknown_tier' };
     }
 
-    const product = catalog.find((p) => p.id === input.tierId);
+    // Pricing experiment (Epic 6.13, #110): a deterministic per-user
+    // cohort, applied on top of the base catalog before any further gate
+    // or price logic runs — every downstream check (disclaimer,
+    // price-honor guardrail, the real Stripe call) sees the cohort-adjusted
+    // catalog, never the raw one.
+    const cohort = pricingExperiment ? assignCohort(input.userId, pricingExperiment) : 'control';
+    const effectiveCatalog = pricingExperiment
+      ? applyPricingExperiment(catalog, cohort, pricingExperiment)
+      : catalog;
+
+    const product = effectiveCatalog.find((p) => p.id === input.tierId);
     if (!product) {
       return { ok: false, error: 'unknown_tier' };
     }
@@ -178,13 +220,26 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
       }
     }
 
+    // Purchase-price guardrail (Epic 6.13, #110): the only resubscribable
+    // tier honors a returning user's original price rather than whatever a
+    // pricing experiment currently shows — a one-off tier can never be
+    // "re-purchased" once owned, so this never applies to one.
+    let priceCents = product.priceCents;
+    if (product.billingModel === 'subscription' && entitlements) {
+      const historicalPrice = await entitlements.findHistoricalPriceCents(input.userId, product.id);
+      if (historicalPrice !== null) {
+        priceCents = historicalPrice;
+      }
+    }
+
     const sessionInput = {
       tierId: product.id,
-      priceCents: product.priceCents,
+      priceCents,
       userId: input.userId,
       customerEmail: input.customerEmail,
       successUrl: input.successUrl,
       cancelUrl: input.cancelUrl,
+      cohort,
       automaticTax: true as const,
       taxIdCollectionEnabled: true as const,
     };
@@ -195,7 +250,7 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
           ? await client.createSubscriptionCheckoutSession(sessionInput)
           : await client.createOneOffCheckoutSession(sessionInput);
 
-      return { ok: true, sessionId: session.id, url: session.url };
+      return { ok: true, sessionId: session.id, url: session.url, cohort };
     } catch (err) {
       const details = err instanceof Error ? err.message : String(err);
       return { ok: false, error: 'checkout_session_failed', details };

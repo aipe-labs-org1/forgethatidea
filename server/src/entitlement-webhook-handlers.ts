@@ -26,6 +26,28 @@ function readBuyerEmail(object: Record<string, unknown>): string | undefined {
   return typeof email === 'string' && email.length > 0 ? email : undefined;
 }
 
+/**
+ * The real amount actually charged, from Stripe's own `amount_total` on
+ * the completed session — this is the number that must drive both revenue
+ * analytics (#108) and the purchase-price-history guardrail (#110), never
+ * a re-lookup of "whatever the catalog says the price is today" (which
+ * would silently rewrite history the moment a price or pricing-experiment
+ * cohort changes). Falls back to the current catalog price only when
+ * amount_total is absent — the unconfigured-Stripe-client stub used before
+ * a real key exists never populates it.
+ */
+function readAmountTotal(object: Record<string, unknown>): number | undefined {
+  const amount = object.amount_total;
+  return typeof amount === 'number' ? amount : undefined;
+}
+
+/** Which pricing-experiment cohort (#110) this checkout session was created under — 'unknown' when absent (an admin-granted or pre-experiment purchase). */
+function readCohort(object: Record<string, unknown>): string {
+  const metadata = (object.metadata ?? {}) as Record<string, unknown>;
+  const cohort = metadata.cohort;
+  return typeof cohort === 'string' && cohort.length > 0 ? cohort : 'unknown';
+}
+
 function readMetadata(object: Record<string, unknown>): { userId: string; tierId: TierId } {
   const metadata = (object.metadata ?? {}) as Record<string, unknown>;
   const userId = metadata.userId;
@@ -72,22 +94,27 @@ export function createEntitlementWebhookHandlers(
           ? subscriptionId
           : String(object.id);
       const buyerEmail = readBuyerEmail(object);
-      await entitlements.grant(userId, tierId, { source: 'purchase', reference, buyerEmail });
+      const catalogPrice = catalog?.find((p) => p.id === tierId)?.priceCents;
+      const purchasePriceCents = readAmountTotal(object) ?? catalogPrice;
+      await entitlements.grant(userId, tierId, {
+        source: 'purchase',
+        reference,
+        buyerEmail,
+        purchasePriceCents,
+      });
 
-      // Revenue analytics (Epic 6.11, #108): the price at the moment of
-      // grant, from the shared catalog (#97) — never re-derived later, so
-      // a subsequent price change can't retroactively rewrite historical
-      // revenue.
-      if (catalog && analyticsLogger) {
-        const product = catalog.find((p) => p.id === tierId);
-        if (product) {
-          emitAnalyticsEvent(analyticsLogger, {
-            type: 'purchase_completed',
-            userId,
-            tierId,
-            amountCents: product.priceCents,
-          });
-        }
+      // Revenue analytics (Epic 6.11, #108): the real amount charged
+      // (amount_total), never re-derived from the current catalog — a
+      // subsequent price or pricing-experiment (#110) change must not
+      // retroactively rewrite historical revenue.
+      if (analyticsLogger && purchasePriceCents !== undefined) {
+        emitAnalyticsEvent(analyticsLogger, {
+          type: 'purchase_completed',
+          userId,
+          tierId,
+          amountCents: purchasePriceCents,
+          cohort: readCohort(object),
+        });
       }
 
       // Duplicate-account entitlement sharing (Epic 6.10, #107): flag,

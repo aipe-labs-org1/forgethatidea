@@ -15,6 +15,8 @@ import {
   FINANCIAL_PACK_DISCLAIMER_VERSION,
 } from './financial-pack-disclaimer.js';
 import { createPurchaseVelocityLimiter } from './purchase-velocity-limiter.js';
+import { createEntitlementsService, createInMemoryEntitlementStore } from './entitlements.js';
+import type { PricingExperimentConfig } from './pricing-experiments.js';
 
 function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
   return {
@@ -275,5 +277,109 @@ describe('createCheckoutSessionTool (#98)', () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it('honors a previous purchase price for a resubscribe of the subscription tier (#110)', async () => {
+    const client = fakeStripeClient();
+    const entitlementStore = createInMemoryEntitlementStore();
+    const entitlements = createEntitlementsService({ store: entitlementStore });
+    await entitlements.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_old',
+      purchasePriceCents: 300,
+    });
+    const tool = createCheckoutSessionTool({ client, catalog, entitlements });
+
+    await tool.createCheckoutSession({
+      tierId: 'app-refinement-topup',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(client.createSubscriptionCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceCents: 300 }),
+    );
+  });
+
+  it('uses the current catalog price for a first-time subscription purchase', async () => {
+    const client = fakeStripeClient();
+    const entitlementStore = createInMemoryEntitlementStore();
+    const entitlements = createEntitlementsService({ store: entitlementStore });
+    const tool = createCheckoutSessionTool({ client, catalog, entitlements });
+
+    await tool.createCheckoutSession({
+      tierId: 'app-refinement-topup',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    const currentPrice = catalog.find((p) => p.id === 'app-refinement-topup')!.priceCents;
+    expect(client.createSubscriptionCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceCents: currentPrice }),
+    );
+  });
+
+  it('never applies price history to a one-off tier', async () => {
+    const client = fakeStripeClient();
+    const entitlementStore = createInMemoryEntitlementStore();
+    const entitlements = createEntitlementsService({ store: entitlementStore });
+    // Simulate an (impossible in practice, but defensively tested) stale
+    // history entry for a one-off tier — the guardrail only ever applies to
+    // the resubscribable tier.
+    await entitlements.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_old',
+      purchasePriceCents: 1,
+    });
+    const tool = createCheckoutSessionTool({ client, catalog, entitlements });
+
+    await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    const currentPrice = catalog.find((p) => p.id === 'spec-pack')!.priceCents;
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceCents: currentPrice }),
+    );
+  });
+
+  it('applies the pricing-experiment cohort price and returns the assigned cohort in the result (#110)', async () => {
+    const client = fakeStripeClient();
+    const pricingExperiment: PricingExperimentConfig = {
+      cohorts: ['only-cohort'],
+      overrides: { 'only-cohort': { 'spec-pack': { priceCents: 990 } } },
+    };
+    const tool = createCheckoutSessionTool({ client, catalog, pricingExperiment });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result).toMatchObject({ ok: true, cohort: 'only-cohort' });
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceCents: 990 }),
+    );
+  });
+
+  it('defaults the cohort to "control" when no pricing experiment is configured', async () => {
+    const client = fakeStripeClient();
+    const tool = createCheckoutSessionTool({ client, catalog });
+
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result).toMatchObject({ ok: true, cohort: 'control' });
   });
 });

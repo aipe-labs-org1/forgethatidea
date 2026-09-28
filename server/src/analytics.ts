@@ -127,6 +127,8 @@ export interface CheckoutStartedEvent {
   userId: string;
   tierId: string;
   surface: string;
+  /** The pricing-experiment cohort this user was assigned to (Epic 6.13, #110's "cohort assignment logged with purchases") — 'control' when no experiment is configured. */
+  cohort: string;
 }
 
 /**
@@ -142,6 +144,8 @@ export interface PurchaseCompletedEvent {
   userId: string;
   tierId: string;
   amountCents: number;
+  /** The pricing-experiment cohort this purchase was made under (Epic 6.13, #110), or 'unknown' when no cohort metadata reached the webhook (e.g. an admin-granted or pre-experiment purchase). */
+  cohort: string;
 }
 
 export type AnalyticsEvent =

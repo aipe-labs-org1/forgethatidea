@@ -116,6 +116,7 @@ import {
   type DisclaimerAcceptanceStore,
 } from './disclaimer-acceptance.js';
 import { registerDisclaimerAcceptanceRoutes } from './routes/disclaimer-acceptance.js';
+import { createPurchaseVelocityLimiter } from './purchase-velocity-limiter.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -178,6 +179,8 @@ export interface BuildAppDeps {
   subscriptionCancelClient?: SubscriptionCancelClient;
   /** Disclaimer-acceptance audit ledger (Epic 6.9). Defaults to in-memory; swap for DB-backed once durability across restarts is needed. */
   disclaimerAcceptanceStore?: DisclaimerAcceptanceStore;
+  /** Purchase velocity limiter (Epic 6.10). Defaults to one built from env caps. */
+  velocityLimiter?: ReturnType<typeof createPurchaseVelocityLimiter>;
 }
 
 /**
@@ -479,10 +482,21 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   });
   registerDisclaimerAcceptanceRoutes(app, authStore, disclaimerAcceptance);
 
+  // Purchase velocity limit (Epic 6.10, #107): a basic payment-abuse guard
+  // — built unconditionally, no Stripe key needed since this only limits
+  // checkout *attempts*, not real Stripe calls.
+  const velocityLimiter =
+    deps.velocityLimiter ??
+    createPurchaseVelocityLimiter({
+      maxAttempts: env.PURCHASE_VELOCITY_MAX_ATTEMPTS,
+      windowMs: env.PURCHASE_VELOCITY_WINDOW_MS,
+    });
+
   const checkoutTool = createCheckoutSessionTool({
     client: stripeClient,
     catalog: tierCatalog,
     disclaimerAcceptance,
+    velocityLimiter,
   });
   registerCheckoutRoutes(app, authStore, checkoutTool);
 
@@ -527,7 +541,24 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
     // grants, charge.refunded/customer.subscription.deleted revoke.
     const stripeEventProcessor = createStripeEventProcessor({
       store: createInMemoryProcessedEventStore(),
-      handlers: deps.stripeEventHandlers ?? createEntitlementWebhookHandlers({ entitlements }),
+      handlers:
+        deps.stripeEventHandlers ??
+        createEntitlementWebhookHandlers({
+          entitlements,
+          // Duplicate-account entitlement sharing (Epic 6.10, #107): flag
+          // via a structured warn log rather than blocking the purchase —
+          // a real fraud pipeline reads this, no automatic action is taken.
+          alertOnAnomaly: (anomaly) =>
+            app.log.warn(
+              {
+                userId: anomaly.userId,
+                tierId: anomaly.tierId,
+                buyerEmail: anomaly.buyerEmail,
+                sharedWithUserIds: anomaly.sharedWithUserIds,
+              },
+              'entitlement sharing anomaly: same buyer email granted the same tier across multiple accounts',
+            ),
+        }),
       alertOnFailure: (alert) =>
         app.log.error(
           { eventId: alert.eventId, eventType: alert.eventType, details: alert.details },

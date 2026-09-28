@@ -70,6 +70,17 @@ const envSchema = z.object({
   // rather than the server failing to boot.
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+
+  // Purchase velocity limit (Epic 6.10, #107): a basic payment-abuse guard
+  // — at most N checkout-session attempts per user within the window,
+  // catching a scripted card-testing pattern without affecting a normal
+  // human buying a couple of tiers in one sitting.
+  PURCHASE_VELOCITY_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  PURCHASE_VELOCITY_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 60 * 1000), // 10 minutes
 });
 
 export type Env = z.infer<typeof envSchema>;

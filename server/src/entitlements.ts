@@ -8,6 +8,8 @@ export interface EntitlementChangeContext {
   reference: string;
   /** The buyer's billing email at the time of purchase (Epic 6.10, #107) — captured so duplicate-account entitlement sharing (the same email buying the same tier under multiple accounts) can be flagged. Optional since not every grant is purchase-driven (e.g. an admin override). */
   buyerEmail?: string;
+  /** The real price paid at the time of purchase (Epic 6.13, #110) — captured so a later resubscribe can be honoured at this historical price rather than whatever a pricing experiment currently shows. Optional since not every grant is purchase-driven. */
+  purchasePriceCents?: number;
 }
 
 export interface EntitlementRecord {
@@ -17,6 +19,7 @@ export interface EntitlementRecord {
   source: EntitlementSource;
   reference: string;
   buyerEmail?: string;
+  purchasePriceCents?: number;
   createdAt: Date;
 }
 
@@ -52,6 +55,13 @@ export interface EntitlementStore {
     tierId: TierId,
     buyerEmail: string,
   ): Promise<string[]>;
+  /**
+   * The most recent grant's purchase price for this user+tier, or null if
+   * never granted (Epic 6.13, #110) — the "purchasers always honoured at
+   * purchase price" guardrail: a resubscribe checkout should charge this
+   * price, not whatever the current pricing experiment shows.
+   */
+  findLatestPurchasePriceCents(userId: string, tierId: TierId): Promise<number | null>;
 }
 
 export function createInMemoryEntitlementStore(): EntitlementStore {
@@ -96,6 +106,13 @@ export function createInMemoryEntitlementStore(): EntitlementStore {
         }
       }
       return [...others];
+    },
+    async findLatestPurchasePriceCents(userId, tierId) {
+      const grants = records.filter(
+        (r) => r.userId === userId && r.tierId === tierId && r.action === 'grant',
+      );
+      const latest = grants[grants.length - 1];
+      return latest?.purchasePriceCents ?? null;
     },
   };
 }
@@ -169,6 +186,10 @@ export function createEntitlementsService(deps: EntitlementsServiceDeps) {
     return store.findOtherUsersGrantedWithEmail(userId, tierId, buyerEmail);
   }
 
+  async function findHistoricalPriceCents(userId: string, tierId: TierId): Promise<number | null> {
+    return store.findLatestPurchasePriceCents(userId, tierId);
+  }
+
   return {
     hasEntitlement,
     listEntitlements,
@@ -176,5 +197,6 @@ export function createEntitlementsService(deps: EntitlementsServiceDeps) {
     revoke,
     findGrantReference,
     findSharedAccounts,
+    findHistoricalPriceCents,
   };
 }

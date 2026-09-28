@@ -254,3 +254,47 @@ describe('entitlements service — entitlement sharing detection (#107)', () => 
     expect(shared).toEqual(['user-1']);
   });
 });
+
+describe('purchase price history (#110)', () => {
+  it('finds the price of the most recent grant for a user+tier', async () => {
+    const store = createInMemoryEntitlementStore();
+    const service = createEntitlementsService({ store });
+
+    await service.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_1',
+      purchasePriceCents: 500,
+    });
+
+    expect(await service.findHistoricalPriceCents('user-1', 'app-refinement-topup')).toBe(500);
+  });
+
+  it('returns null when the user has never purchased this tier before', async () => {
+    const store = createInMemoryEntitlementStore();
+    const service = createEntitlementsService({ store });
+
+    expect(await service.findHistoricalPriceCents('user-1', 'app-refinement-topup')).toBeNull();
+  });
+
+  it('uses the most recent grant price when a user has purchased and re-purchased at different prices', async () => {
+    const store = createInMemoryEntitlementStore();
+    const service = createEntitlementsService({ store });
+
+    await service.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_1',
+      purchasePriceCents: 500,
+    });
+    await service.revoke('user-1', 'app-refinement-topup', {
+      source: 'subscription_cancel',
+      reference: 'sub_1',
+    });
+    await service.grant('user-1', 'app-refinement-topup', {
+      source: 'purchase',
+      reference: 'sub_2',
+      purchasePriceCents: 300,
+    });
+
+    expect(await service.findHistoricalPriceCents('user-1', 'app-refinement-topup')).toBe(300);
+  });
+});

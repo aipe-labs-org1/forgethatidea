@@ -117,6 +117,7 @@ import {
 } from './disclaimer-acceptance.js';
 import { registerDisclaimerAcceptanceRoutes } from './routes/disclaimer-acceptance.js';
 import { createPurchaseVelocityLimiter } from './purchase-velocity-limiter.js';
+import type { PricingExperimentConfig } from './pricing-experiments.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -181,6 +182,8 @@ export interface BuildAppDeps {
   disclaimerAcceptanceStore?: DisclaimerAcceptanceStore;
   /** Purchase velocity limiter (Epic 6.10). Defaults to one built from env caps. */
   velocityLimiter?: ReturnType<typeof createPurchaseVelocityLimiter>;
+  /** Active pricing experiment (Epic 6.13, #110). No default — undefined means every user is the implicit 'control' cohort at the base catalog price/copy. Not env-driven: an experiment's cohort list + per-tier overrides don't fit a flat env-var shape, and there's no live experiment running yet to configure. */
+  pricingExperiment?: PricingExperimentConfig;
 }
 
 /**
@@ -492,21 +495,25 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
       windowMs: env.PURCHASE_VELOCITY_WINDOW_MS,
     });
 
+  // Entitlements service (Epic 6.4): the single source of truth every gate
+  // queries — "does this user own this tier." Built unconditionally (not
+  // gated behind a real Stripe key) since admin overrides and future gate
+  // checks need it regardless of whether real purchases are flowing yet.
+  // Built before the checkout tool below since it needs entitlements for
+  // the purchase-price-honor guardrail (#110).
+  const entitlementStore = deps.entitlementStore ?? createInMemoryEntitlementStore();
+  const entitlements = createEntitlementsService({ store: entitlementStore });
+  app.decorate('entitlements', entitlements);
+
   const checkoutTool = createCheckoutSessionTool({
     client: stripeClient,
     catalog: tierCatalog,
     disclaimerAcceptance,
     velocityLimiter,
+    entitlements,
+    pricingExperiment: deps.pricingExperiment,
   });
   registerCheckoutRoutes(app, authStore, checkoutTool, analyticsLogger);
-
-  // Entitlements service (Epic 6.4): the single source of truth every gate
-  // queries — "does this user own this tier." Built unconditionally (not
-  // gated behind a real Stripe key) since admin overrides and future gate
-  // checks need it regardless of whether real purchases are flowing yet.
-  const entitlementStore = deps.entitlementStore ?? createInMemoryEntitlementStore();
-  const entitlements = createEntitlementsService({ store: entitlementStore });
-  app.decorate('entitlements', entitlements);
 
   // Entitlements read route (Epic 6.5): lets the frontend re-check what the
   // user owns after returning from checkout, without a full session

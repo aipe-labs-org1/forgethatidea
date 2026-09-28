@@ -131,6 +131,7 @@ describe('checkout route (#98)', () => {
         type: 'checkout_started',
         tierId: 'spec-pack',
         surface: 'account_page',
+        cohort: 'control',
       }),
       'analytics.checkout_started',
     );

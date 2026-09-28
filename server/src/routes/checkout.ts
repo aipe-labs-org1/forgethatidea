@@ -67,6 +67,7 @@ export function registerCheckoutRoutes(
       userId: request.userId!,
       tierId: parsed.data.tierId,
       surface: parsed.data.surface,
+      cohort: result.cohort,
     });
 
     return reply.status(200).send(result);

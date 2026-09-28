@@ -17,6 +17,7 @@ const checkoutSchema = z.object({
 const ERROR_STATUS: Record<Extract<CheckoutSessionResult, { ok: false }>['error'], number> = {
   unknown_tier: 400,
   disclaimer_not_accepted: 403,
+  velocity_limit_exceeded: 429,
   checkout_session_failed: 502,
 };
 

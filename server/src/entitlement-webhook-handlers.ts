@@ -2,8 +2,23 @@ import { isTierId, type TierId } from './tier-catalog.js';
 import type { createEntitlementsService } from './entitlements.js';
 import type { StripeEventHandler } from './stripe-event-processor.js';
 
+export interface EntitlementSharingAnomaly {
+  userId: string;
+  tierId: TierId;
+  buyerEmail: string;
+  sharedWithUserIds: string[];
+}
+
 export interface EntitlementWebhookHandlersDeps {
   entitlements: ReturnType<typeof createEntitlementsService>;
+  /** Called when the same buyer email has been granted the same tier under more than one account (Epic 6.10, #107) — e.g. a Slack post, a metric increment. Optional so existing callers/tests that never exercise the gated path don't need one. */
+  alertOnAnomaly?: (anomaly: EntitlementSharingAnomaly) => void;
+}
+
+function readBuyerEmail(object: Record<string, unknown>): string | undefined {
+  const customerDetails = object.customer_details as Record<string, unknown> | undefined;
+  const email = customerDetails?.email;
+  return typeof email === 'string' && email.length > 0 ? email : undefined;
 }
 
 function readMetadata(object: Record<string, unknown>): { userId: string; tierId: TierId } {
@@ -34,7 +49,7 @@ function readMetadata(object: Record<string, unknown>): { userId: string; tierId
 export function createEntitlementWebhookHandlers(
   deps: EntitlementWebhookHandlersDeps,
 ): Record<string, StripeEventHandler> {
-  const { entitlements } = deps;
+  const { entitlements, alertOnAnomaly } = deps;
 
   return {
     'checkout.session.completed': async (object) => {
@@ -51,7 +66,18 @@ export function createEntitlementWebhookHandlers(
         typeof subscriptionId === 'string' && subscriptionId.length > 0
           ? subscriptionId
           : String(object.id);
-      await entitlements.grant(userId, tierId, { source: 'purchase', reference });
+      const buyerEmail = readBuyerEmail(object);
+      await entitlements.grant(userId, tierId, { source: 'purchase', reference, buyerEmail });
+
+      // Duplicate-account entitlement sharing (Epic 6.10, #107): flag,
+      // never block — a false positive here (e.g. a shared family email)
+      // shouldn't cost a legitimate buyer their purchase.
+      if (buyerEmail && alertOnAnomaly) {
+        const sharedWithUserIds = await entitlements.findSharedAccounts(userId, tierId, buyerEmail);
+        if (sharedWithUserIds.length > 0) {
+          alertOnAnomaly({ userId, tierId, buyerEmail, sharedWithUserIds });
+        }
+      }
     },
     'charge.refunded': async (object) => {
       const { userId, tierId } = readMetadata(object);

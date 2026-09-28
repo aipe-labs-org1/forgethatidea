@@ -4,6 +4,10 @@ import {
   FINANCIAL_PACK_DISCLAIMER_ID,
   FINANCIAL_PACK_DISCLAIMER_VERSION,
 } from './financial-pack-disclaimer.js';
+import {
+  isVelocityLimitRejected,
+  type createPurchaseVelocityLimiter,
+} from './purchase-velocity-limiter.js';
 
 export interface StripeCheckoutSession {
   id: string;
@@ -88,6 +92,13 @@ export interface CreateCheckoutSessionToolDeps {
    * never exercise the gated path; build-app.ts always wires a real one.
    */
   disclaimerAcceptance?: ReturnType<typeof createDisclaimerAcceptanceService>;
+  /**
+   * Purchase velocity limit (Epic 6.10, #107) — optional for the same
+   * reason as disclaimerAcceptance above (existing callers/tests for the
+   * unlimited path don't need to construct one); build-app.ts always
+   * wires a real one.
+   */
+  velocityLimiter?: ReturnType<typeof createPurchaseVelocityLimiter>;
 }
 
 export interface CreateCheckoutSessionInput {
@@ -103,6 +114,7 @@ export type CheckoutSessionResult =
   | { ok: true; sessionId: string; url: string }
   | { ok: false; error: 'unknown_tier' }
   | { ok: false; error: 'disclaimer_not_accepted'; disclaimerId: string; version: string }
+  | { ok: false; error: 'velocity_limit_exceeded'; retryAfterMs: number }
   | { ok: false; error: 'checkout_session_failed'; details: string };
 
 /**
@@ -124,7 +136,7 @@ export function isCheckoutSessionFailure(
  * catalog (#97) so a request can't smuggle in an arbitrary amount.
  */
 export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
-  const { client, catalog, disclaimerAcceptance } = deps;
+  const { client, catalog, disclaimerAcceptance, velocityLimiter } = deps;
 
   async function createCheckoutSession(
     input: CreateCheckoutSessionInput,
@@ -136,6 +148,16 @@ export function createCheckoutSessionTool(deps: CreateCheckoutSessionToolDeps) {
     const product = catalog.find((p) => p.id === input.tierId);
     if (!product) {
       return { ok: false, error: 'unknown_tier' };
+    }
+
+    // Purchase velocity limit (Epic 6.10, #107): checked before the
+    // disclaimer gate and the real Stripe call — a scripted card-testing
+    // pattern should be stopped as early as possible, regardless of tier.
+    if (velocityLimiter) {
+      const velocity = velocityLimiter.check(input.userId);
+      if (isVelocityLimitRejected(velocity)) {
+        return { ok: false, error: 'velocity_limit_exceeded', retryAfterMs: velocity.retryAfterMs };
+      }
     }
 
     // Financial pack assumptions/not-advice gate (Epic 6.9, #105): the

@@ -162,3 +162,95 @@ describe('findLatestGrantReference (#103)', () => {
     expect(reference).toBeNull();
   });
 });
+
+describe('findOtherUsersGrantedWithEmail (#107)', () => {
+  it('flags a different user account granted the same tier under the same buyer email', async () => {
+    const store = createInMemoryEntitlementStore();
+
+    await store.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_1',
+      buyerEmail: 'shared@example.com',
+    });
+    await store.grant('user-2', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_2',
+      buyerEmail: 'shared@example.com',
+    });
+
+    const others = await store.findOtherUsersGrantedWithEmail(
+      'user-2',
+      'spec-pack',
+      'shared@example.com',
+    );
+
+    expect(others).toEqual(['user-1']);
+  });
+
+  it('does not flag the same user granted twice under their own email', async () => {
+    const store = createInMemoryEntitlementStore();
+
+    await store.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_1',
+      buyerEmail: 'me@example.com',
+    });
+    await store.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_2',
+      buyerEmail: 'me@example.com',
+    });
+
+    const others = await store.findOtherUsersGrantedWithEmail(
+      'user-1',
+      'spec-pack',
+      'me@example.com',
+    );
+
+    expect(others).toEqual([]);
+  });
+
+  it('does not flag a different email, even across different users', async () => {
+    const store = createInMemoryEntitlementStore();
+
+    await store.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_1',
+      buyerEmail: 'one@example.com',
+    });
+    await store.grant('user-2', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_2',
+      buyerEmail: 'two@example.com',
+    });
+
+    const others = await store.findOtherUsersGrantedWithEmail(
+      'user-2',
+      'spec-pack',
+      'two@example.com',
+    );
+
+    expect(others).toEqual([]);
+  });
+});
+
+describe('entitlements service — entitlement sharing detection (#107)', () => {
+  it('exposes findSharedAccounts for a service-layer caller to check for duplicate-account sharing', async () => {
+    const store = createInMemoryEntitlementStore();
+    const service = createEntitlementsService({ store });
+
+    await service.grant('user-1', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_1',
+      buyerEmail: 'shared@example.com',
+    });
+    await service.grant('user-2', 'spec-pack', {
+      source: 'purchase',
+      reference: 'cs_2',
+      buyerEmail: 'shared@example.com',
+    });
+
+    const shared = await service.findSharedAccounts('user-2', 'spec-pack', 'shared@example.com');
+    expect(shared).toEqual(['user-1']);
+  });
+});

@@ -14,6 +14,7 @@ import {
   FINANCIAL_PACK_DISCLAIMER_ID,
   FINANCIAL_PACK_DISCLAIMER_VERSION,
 } from './financial-pack-disclaimer.js';
+import { createPurchaseVelocityLimiter } from './purchase-velocity-limiter.js';
 
 function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
   return {
@@ -223,6 +224,52 @@ describe('createCheckoutSessionTool (#98)', () => {
     const result = await tool.createCheckoutSession({
       tierId: 'spec-pack',
       userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a checkout attempt once the purchase velocity limit is exceeded (#107)', async () => {
+    const client = fakeStripeClient();
+    const velocityLimiter = createPurchaseVelocityLimiter({ maxAttempts: 1, windowMs: 60_000 });
+    const tool = createCheckoutSessionTool({ client, catalog, velocityLimiter });
+
+    await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+
+    expect(isCheckoutSessionFailure(result)).toBe(true);
+    if (isCheckoutSessionFailure(result)) {
+      expect(result.error).toBe('velocity_limit_exceeded');
+    }
+    expect(client.createOneOffCheckoutSession).toHaveBeenCalledOnce();
+  });
+
+  it('tracks the velocity limit independently per user', async () => {
+    const client = fakeStripeClient();
+    const velocityLimiter = createPurchaseVelocityLimiter({ maxAttempts: 1, windowMs: 60_000 });
+    const tool = createCheckoutSessionTool({ client, catalog, velocityLimiter });
+
+    await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-1',
+      successUrl: 'https://forge.test/success',
+      cancelUrl: 'https://forge.test/cancel',
+    });
+    const result = await tool.createCheckoutSession({
+      tierId: 'spec-pack',
+      userId: 'user-2',
       successUrl: 'https://forge.test/success',
       cancelUrl: 'https://forge.test/cancel',
     });

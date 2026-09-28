@@ -6,6 +6,8 @@ export interface EntitlementChangeContext {
   source: EntitlementSource;
   /** Free-form provenance for the audit trail — a Stripe checkout session id, a refund id, or a support ticket reference for an admin override. */
   reference: string;
+  /** The buyer's billing email at the time of purchase (Epic 6.10, #107) — captured so duplicate-account entitlement sharing (the same email buying the same tier under multiple accounts) can be flagged. Optional since not every grant is purchase-driven (e.g. an admin override). */
+  buyerEmail?: string;
 }
 
 export interface EntitlementRecord {
@@ -14,6 +16,7 @@ export interface EntitlementRecord {
   action: 'grant' | 'revoke';
   source: EntitlementSource;
   reference: string;
+  buyerEmail?: string;
   createdAt: Date;
 }
 
@@ -37,6 +40,18 @@ export interface EntitlementStore {
    * `stripe.subscriptions.cancel` on the right subscription.
    */
   findLatestGrantReference(userId: string, tierId: TierId): Promise<string | null>;
+  /**
+   * Every distinct userId (other than the one passed in) that has ever
+   * been granted this tier under the same buyer email (Epic 6.10, #107's
+   * "entitlement sharing anomalies flagged") — a real, if basic, signal
+   * that the same buyer (or someone sharing their billing details) is
+   * getting the same paid product across multiple accounts.
+   */
+  findOtherUsersGrantedWithEmail(
+    userId: string,
+    tierId: TierId,
+    buyerEmail: string,
+  ): Promise<string[]>;
 }
 
 export function createInMemoryEntitlementStore(): EntitlementStore {
@@ -67,6 +82,20 @@ export function createInMemoryEntitlementStore(): EntitlementStore {
       );
       const latest = grants[grants.length - 1];
       return latest?.reference ?? null;
+    },
+    async findOtherUsersGrantedWithEmail(userId, tierId, buyerEmail) {
+      const others = new Set<string>();
+      for (const record of records) {
+        if (
+          record.action === 'grant' &&
+          record.tierId === tierId &&
+          record.buyerEmail === buyerEmail &&
+          record.userId !== userId
+        ) {
+          others.add(record.userId);
+        }
+      }
+      return [...others];
     },
   };
 }
@@ -132,5 +161,20 @@ export function createEntitlementsService(deps: EntitlementsServiceDeps) {
     return store.findLatestGrantReference(userId, tierId);
   }
 
-  return { hasEntitlement, listEntitlements, grant, revoke, findGrantReference };
+  async function findSharedAccounts(
+    userId: string,
+    tierId: TierId,
+    buyerEmail: string,
+  ): Promise<string[]> {
+    return store.findOtherUsersGrantedWithEmail(userId, tierId, buyerEmail);
+  }
+
+  return {
+    hasEntitlement,
+    listEntitlements,
+    grant,
+    revoke,
+    findGrantReference,
+    findSharedAccounts,
+  };
 }

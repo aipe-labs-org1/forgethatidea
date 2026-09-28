@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createEntitlementWebhookHandlers } from './entitlement-webhook-handlers.js';
 import { createEntitlementsService, createInMemoryEntitlementStore } from './entitlements.js';
 
@@ -102,5 +102,59 @@ describe('entitlement webhook handlers (#100)', () => {
     });
 
     expect(await entitlements.findGrantReference('user-1', 'spec-pack')).toBe('cs_test_1');
+  });
+
+  it('captures the buyer email from customer_details and flags a shared-account anomaly (#107)', async () => {
+    const entitlements = service();
+    const alertOnAnomaly = vi.fn();
+    const handlers = createEntitlementWebhookHandlers({ entitlements, alertOnAnomaly });
+
+    await handlers['checkout.session.completed']!({
+      id: 'cs_1',
+      customer_details: { email: 'shared@example.com' },
+      metadata: { userId: 'user-1', tierId: 'spec-pack' },
+    });
+    await handlers['checkout.session.completed']!({
+      id: 'cs_2',
+      customer_details: { email: 'shared@example.com' },
+      metadata: { userId: 'user-2', tierId: 'spec-pack' },
+    });
+
+    expect(alertOnAnomaly).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-2',
+        tierId: 'spec-pack',
+        buyerEmail: 'shared@example.com',
+        sharedWithUserIds: ['user-1'],
+      }),
+    );
+  });
+
+  it('does not alert when no other account shares the buyer email', async () => {
+    const entitlements = service();
+    const alertOnAnomaly = vi.fn();
+    const handlers = createEntitlementWebhookHandlers({ entitlements, alertOnAnomaly });
+
+    await handlers['checkout.session.completed']!({
+      id: 'cs_1',
+      customer_details: { email: 'unique@example.com' },
+      metadata: { userId: 'user-1', tierId: 'spec-pack' },
+    });
+
+    expect(alertOnAnomaly).not.toHaveBeenCalled();
+  });
+
+  it('does not throw or alert when customer_details is absent (e.g. no real key configured)', async () => {
+    const entitlements = service();
+    const alertOnAnomaly = vi.fn();
+    const handlers = createEntitlementWebhookHandlers({ entitlements, alertOnAnomaly });
+
+    await expect(
+      handlers['checkout.session.completed']!({
+        id: 'cs_1',
+        metadata: { userId: 'user-1', tierId: 'spec-pack' },
+      }),
+    ).resolves.not.toThrow();
+    expect(alertOnAnomaly).not.toHaveBeenCalled();
   });
 });

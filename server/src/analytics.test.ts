@@ -177,6 +177,50 @@ describe('emitAnalyticsEvent (#42)', () => {
     );
   });
 
+  it('logs a checkout_started event with userId/tierId/surface (#108)', () => {
+    const logger = { info: vi.fn() };
+
+    emitAnalyticsEvent(logger, {
+      type: 'checkout_started',
+      userId: 'user-1',
+      tierId: 'spec-pack',
+      surface: 'refinement_gate',
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        analytics_event: true,
+        type: 'checkout_started',
+        userId: 'user-1',
+        tierId: 'spec-pack',
+        surface: 'refinement_gate',
+      },
+      'analytics.checkout_started',
+    );
+  });
+
+  it('logs a purchase_completed event with userId/tierId/amountCents (#108)', () => {
+    const logger = { info: vi.fn() };
+
+    emitAnalyticsEvent(logger, {
+      type: 'purchase_completed',
+      userId: 'user-1',
+      tierId: 'spec-pack',
+      amountCents: 1900,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        analytics_event: true,
+        type: 'purchase_completed',
+        userId: 'user-1',
+        tierId: 'spec-pack',
+        amountCents: 1900,
+      },
+      'analytics.purchase_completed',
+    );
+  });
+
   it('never includes anything beyond sessionId, event-specific structural fields, and the type', () => {
     const logger = { info: vi.fn() };
 

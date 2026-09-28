@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createEntitlementWebhookHandlers } from './entitlement-webhook-handlers.js';
 import { createEntitlementsService, createInMemoryEntitlementStore } from './entitlements.js';
+import { getTierCatalog } from './tier-catalog.js';
+import { loadEnv } from './env.js';
+
+const testCatalog = getTierCatalog(loadEnv({ NODE_ENV: 'test' } as NodeJS.ProcessEnv));
 
 function service() {
   const store = createInMemoryEntitlementStore();
@@ -156,5 +160,32 @@ describe('entitlement webhook handlers (#100)', () => {
       }),
     ).resolves.not.toThrow();
     expect(alertOnAnomaly).not.toHaveBeenCalled();
+  });
+
+  it('emits a purchase_completed analytics event with the real tier price on grant (#108)', async () => {
+    const entitlements = service();
+    const analyticsLogger = { info: vi.fn() };
+    const handlers = createEntitlementWebhookHandlers({
+      entitlements,
+      catalog: testCatalog,
+      analyticsLogger,
+    });
+
+    await handlers['checkout.session.completed']!({
+      id: 'cs_1',
+      metadata: { userId: 'user-1', tierId: 'spec-pack' },
+    });
+
+    const specPackPrice = testCatalog.find((p) => p.id === 'spec-pack')!.priceCents;
+    expect(analyticsLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analytics_event: true,
+        type: 'purchase_completed',
+        userId: 'user-1',
+        tierId: 'spec-pack',
+        amountCents: specPackPrice,
+      }),
+      'analytics.purchase_completed',
+    );
   });
 });

@@ -4,6 +4,7 @@ import {
   createPersistingAnalyticsLogger,
   queryRefinementFunnel,
   queryBuildFailureReport,
+  queryRevenueReport,
 } from './analytics-store.js';
 
 describe('createPersistingAnalyticsLogger (#95)', () => {
@@ -38,6 +39,20 @@ describe('createPersistingAnalyticsLogger (#95)', () => {
     // query); covered indirectly by queryRefinementFunnel tests only
     // counting real analytics events.
     expect(true).toBe(true);
+  });
+
+  it('persists an event with no sessionId (a user-scoped event, e.g. a purchase) without dropping it (#108)', async () => {
+    const store = createInMemoryAnalyticsStore();
+    const logger = createPersistingAnalyticsLogger(store, { info: () => {} });
+
+    logger.info(
+      { analytics_event: true, type: 'purchase_completed', userId: 'user-1', tierId: 'spec-pack' },
+      'analytics.purchase_completed',
+    );
+
+    const events = await store.listAll();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'purchase_completed', sessionId: null });
   });
 });
 
@@ -320,5 +335,89 @@ describe('queryBuildFailureReport (#83)', () => {
     expect(result.totalFailed).toBe(0);
     expect(result.failuresByArchetype).toEqual({});
     expect(result.failuresByCause).toEqual({});
+  });
+});
+
+describe('queryRevenueReport (#108)', () => {
+  async function logPurchase(
+    logger: ReturnType<typeof createPersistingAnalyticsLogger>,
+    userId: string,
+    tierId: string,
+    amountCents: number,
+    createdAt?: Date,
+  ) {
+    logger.info(
+      { analytics_event: true, type: 'purchase_completed', userId, tierId, amountCents },
+      'analytics.purchase_completed',
+    );
+    void createdAt;
+  }
+
+  it('sums revenue by tier', async () => {
+    const store = createInMemoryAnalyticsStore();
+    const logger = createPersistingAnalyticsLogger(store, { info: () => {} });
+
+    await logPurchase(logger, 'user-1', 'spec-pack', 1900);
+    await logPurchase(logger, 'user-2', 'spec-pack', 1900);
+    await logPurchase(logger, 'user-3', 'pitch-deck', 2900);
+
+    const report = await queryRevenueReport(store);
+
+    expect(report.revenueByTierCents).toEqual({ 'spec-pack': 3800, 'pitch-deck': 2900 });
+  });
+
+  it('computes offer-to-purchase conversion per surface', async () => {
+    const store = createInMemoryAnalyticsStore();
+    const logger = createPersistingAnalyticsLogger(store, { info: () => {} });
+
+    logger.info(
+      {
+        analytics_event: true,
+        type: 'checkout_started',
+        userId: 'user-1',
+        tierId: 'spec-pack',
+        surface: 'refinement_gate',
+      },
+      'analytics.checkout_started',
+    );
+    logger.info(
+      {
+        analytics_event: true,
+        type: 'checkout_started',
+        userId: 'user-2',
+        tierId: 'spec-pack',
+        surface: 'refinement_gate',
+      },
+      'analytics.checkout_started',
+    );
+    await logPurchase(logger, 'user-1', 'spec-pack', 1900);
+
+    const report = await queryRevenueReport(store);
+
+    expect(report.conversionBySurface.refinement_gate).toEqual({ started: 2, completed: 1 });
+  });
+
+  it('derives a weekly revenue summary', async () => {
+    const store = createInMemoryAnalyticsStore();
+    const logger = createPersistingAnalyticsLogger(store, { info: () => {} });
+
+    await logPurchase(logger, 'user-1', 'spec-pack', 1900);
+    await logPurchase(logger, 'user-2', 'pitch-deck', 2900);
+
+    const report = await queryRevenueReport(store);
+
+    expect(report.weeklyRevenueCents.length).toBeGreaterThan(0);
+    const total = report.weeklyRevenueCents.reduce((sum, w) => sum + w.revenueCents, 0);
+    expect(total).toBe(4800);
+  });
+
+  it('reports zeroed-out results with no purchase events', async () => {
+    const store = createInMemoryAnalyticsStore();
+
+    const report = await queryRevenueReport(store);
+
+    expect(report.revenueByTierCents).toEqual({});
+    expect(report.conversionBySurface).toEqual({});
+    expect(report.weeklyRevenueCents).toEqual([]);
   });
 });

@@ -12,6 +12,10 @@ import {
   createInMemoryDisclaimerAcceptanceStore,
 } from '../disclaimer-acceptance.js';
 
+function silentAnalyticsLogger() {
+  return { info: vi.fn() };
+}
+
 function fakeStripeClient(overrides: Partial<StripeClient> = {}): StripeClient {
   return {
     createOneOffCheckoutSession: vi.fn(async ({ tierId }) => ({
@@ -36,12 +40,13 @@ async function buildTestApp(client: StripeClient = fakeStripeClient()) {
     store: createInMemoryDisclaimerAcceptanceStore(),
   });
   const checkoutTool = createCheckoutSessionTool({ client, catalog, disclaimerAcceptance });
+  const analyticsLogger = silentAnalyticsLogger();
 
   registerAuthRoutes(app, authStore);
-  registerCheckoutRoutes(app, authStore, checkoutTool);
+  registerCheckoutRoutes(app, authStore, checkoutTool, analyticsLogger);
 
   await app.ready();
-  return { app, disclaimerAcceptance };
+  return { app, disclaimerAcceptance, analyticsLogger };
 }
 
 function extractCookie(res: { headers: Record<string, unknown> }): string {
@@ -102,6 +107,54 @@ describe('checkout route (#98)', () => {
       sessionId: 'cs_test_spec-pack',
       url: 'https://checkout.stripe.com/test/spec-pack',
     });
+  });
+
+  it('emits a checkout_started analytics event on successful session creation, tagged with the given surface (#108)', async () => {
+    const { app, analyticsLogger } = await buildTestApp();
+    const authCookie = await signUpAndGetCookie(app);
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/checkout',
+      headers: { cookie: authCookie },
+      payload: {
+        tierId: 'spec-pack',
+        surface: 'account_page',
+        successUrl: 'https://forge.test/success',
+        cancelUrl: 'https://forge.test/cancel',
+      },
+    });
+
+    expect(analyticsLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analytics_event: true,
+        type: 'checkout_started',
+        tierId: 'spec-pack',
+        surface: 'account_page',
+      }),
+      'analytics.checkout_started',
+    );
+  });
+
+  it('defaults the surface to "unknown" when not provided', async () => {
+    const { app, analyticsLogger } = await buildTestApp();
+    const authCookie = await signUpAndGetCookie(app);
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/checkout',
+      headers: { cookie: authCookie },
+      payload: {
+        tierId: 'spec-pack',
+        successUrl: 'https://forge.test/success',
+        cancelUrl: 'https://forge.test/cancel',
+      },
+    });
+
+    expect(analyticsLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'checkout_started', surface: 'unknown' }),
+      'analytics.checkout_started',
+    );
   });
 
   it("passes the signed-in user's own email through as customerEmail (drives Stripe's automatic receipt, #102)", async () => {

@@ -6,7 +6,8 @@ import type { AnalyticsLogger } from './analytics.js';
 export interface AnalyticsEventRecord {
   id: string;
   type: string;
-  sessionId: string;
+  /** Null for a user-scoped event with no real build session (Epic 6.11, #108) — a purchase or a data-export request, e.g. */
+  sessionId: string | null;
   payload: Record<string, unknown>;
   createdAt: Date;
 }
@@ -24,8 +25,10 @@ export interface AnalyticsStore {
 export function createDbAnalyticsStore(db: Database): AnalyticsStore {
   return {
     async record(event) {
-      const { type, sessionId, ...rest } = event as { type: string; sessionId: string };
-      await db.insert(analyticsEvents).values({ type, sessionId, payload: rest });
+      const { type, sessionId, ...rest } = event as { type: string; sessionId?: string };
+      await db
+        .insert(analyticsEvents)
+        .values({ type, sessionId: sessionId ?? null, payload: rest });
     },
 
     async listAll() {
@@ -47,11 +50,11 @@ export function createInMemoryAnalyticsStore(): AnalyticsStore {
 
   return {
     async record(event) {
-      const { type, sessionId, ...rest } = event as { type: string; sessionId: string };
+      const { type, sessionId, ...rest } = event as { type: string; sessionId?: string };
       rows.push({
         id: `event-${nextId++}`,
         type,
-        sessionId,
+        sessionId: sessionId ?? null,
         payload: rest,
         createdAt: new Date(),
       });
@@ -123,6 +126,11 @@ export async function queryRefinementFunnel(
   const exportedFromGateSessions = new Set<string>();
 
   for (const event of events) {
+    // Refinement-funnel events are always session-scoped (they come from
+    // in-session refinement flows) — a null sessionId here would only mean
+    // a genuinely different, non-session event type slipping through, so
+    // it's excluded from these session-keyed sets rather than coerced.
+    if (!event.sessionId) continue;
     allSessions.add(event.sessionId);
 
     if (event.type === 'refinement_used') {
@@ -209,4 +217,86 @@ export async function queryBuildFailureReport(store: AnalyticsStore): Promise<Bu
     totalSucceeded,
     totalFailed,
   };
+}
+
+export interface SurfaceConversion {
+  started: number;
+  completed: number;
+}
+
+export interface WeeklyRevenue {
+  /** ISO date (Monday) of the week this bucket covers. */
+  weekStart: string;
+  revenueCents: number;
+}
+
+export interface RevenueReport {
+  /** Total revenue in cents, keyed by tier id — the "revenue by product/tier" criterion (Epic 6.11, #108). */
+  revenueByTierCents: Record<string, number>;
+  /** checkout_started vs. purchase_completed counts, keyed by the surface the checkout was triggered from — "offer->purchase conversion per surface". Completed is counted per-tier-per-user (a user paying for the same tier twice within the same surface funnel is a distinct real purchase, not double-counted against a single "started"). */
+  conversionBySurface: Record<string, SurfaceConversion>;
+  /** Revenue bucketed by ISO week (Monday-start) — "weekly revenue summary derivable", sorted oldest first. */
+  weeklyRevenueCents: WeeklyRevenue[];
+}
+
+function isoWeekStart(date: Date): string {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = d.getUTCDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diffToMonday);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Computes revenue/conversion metrics (Epic 6.11, #108) directly from the
+ * durable event log, mirroring queryRefinementFunnel/queryBuildFailureReport's
+ * shape — the queryable surface for a script, test, or future admin route.
+ * Revenue is summed from purchase_completed's own amountCents (captured at
+ * the real price at grant time, entitlement-webhook-handlers.ts) rather than
+ * re-derived from the current tier catalog, so a later price change never
+ * retroactively rewrites historical revenue. Conversion is a simple count
+ * pair per surface rather than a true per-user funnel match — good enough
+ * for "which offer placement converts better," the actual question this
+ * criterion asks.
+ */
+export async function queryRevenueReport(store: AnalyticsStore): Promise<RevenueReport> {
+  const events = await store.listAll();
+
+  const revenueByTierCents: Record<string, number> = {};
+  const conversionBySurface: Record<string, SurfaceConversion> = {};
+  const weeklyBuckets = new Map<string, number>();
+  const surfaceByUserAndTier = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type === 'checkout_started') {
+      const surface = event.payload.surface as string;
+      const userId = event.payload.userId as string;
+      const tierId = event.payload.tierId as string;
+      conversionBySurface[surface] ??= { started: 0, completed: 0 };
+      conversionBySurface[surface]!.started++;
+      surfaceByUserAndTier.set(`${userId}:${tierId}`, surface);
+    }
+
+    if (event.type === 'purchase_completed') {
+      const tierId = event.payload.tierId as string;
+      const userId = event.payload.userId as string;
+      const amountCents = event.payload.amountCents as number;
+
+      revenueByTierCents[tierId] = (revenueByTierCents[tierId] ?? 0) + amountCents;
+
+      const weekStart = isoWeekStart(event.createdAt);
+      weeklyBuckets.set(weekStart, (weeklyBuckets.get(weekStart) ?? 0) + amountCents);
+
+      const surface = surfaceByUserAndTier.get(`${userId}:${tierId}`);
+      if (surface) {
+        conversionBySurface[surface]!.completed++;
+      }
+    }
+  }
+
+  const weeklyRevenueCents = [...weeklyBuckets.entries()]
+    .map(([weekStart, revenueCents]) => ({ weekStart, revenueCents }))
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+
+  return { revenueByTierCents, conversionBySurface, weeklyRevenueCents };
 }

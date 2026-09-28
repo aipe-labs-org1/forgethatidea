@@ -498,7 +498,7 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
     disclaimerAcceptance,
     velocityLimiter,
   });
-  registerCheckoutRoutes(app, authStore, checkoutTool);
+  registerCheckoutRoutes(app, authStore, checkoutTool, analyticsLogger);
 
   // Entitlements service (Epic 6.4): the single source of truth every gate
   // queries — "does this user own this tier." Built unconditionally (not
@@ -545,6 +545,8 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
         deps.stripeEventHandlers ??
         createEntitlementWebhookHandlers({
           entitlements,
+          catalog: tierCatalog,
+          analyticsLogger,
           // Duplicate-account entitlement sharing (Epic 6.10, #107): flag
           // via a structured warn log rather than blocking the purchase —
           // a real fraud pipeline reads this, no automatic action is taken.

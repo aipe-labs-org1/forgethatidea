@@ -152,7 +152,8 @@ export const artifacts = pgTable('artifacts', {
 export const analyticsEvents = pgTable('analytics_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   type: text('type').notNull(),
-  sessionId: text('session_id').notNull(),
+  /** Nullable (Epic 6.11, #108): not every analytics event is tied to a build session — a purchase or a data-export request is scoped to a user, not a session. */
+  sessionId: text('session_id'),
   /** The event's own fields (kind, rounds, limit, version, etc.) — shape varies per type, same union as analytics.ts's AnalyticsEvent. */
   payload: jsonb('payload').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

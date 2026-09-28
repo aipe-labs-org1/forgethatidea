@@ -1,0 +1,1 @@
+ALTER TABLE "analytics_events" ALTER COLUMN "session_id" DROP NOT NULL;

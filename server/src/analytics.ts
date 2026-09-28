@@ -112,6 +112,38 @@ export interface DataExportRequestedEvent {
   userId: string;
 }
 
+/**
+ * Fires when a checkout session is successfully created (Epic 6.11, #108's
+ * "offer→purchase conversion per surface") — the numerator/denominator pair
+ * with PurchaseCompletedEvent below is what actually makes a conversion
+ * rate computable, closing the exact gap GateShownEvent's own doc comment
+ * flagged ("no real upgrade path to convert into") back when Epic 6 didn't
+ * exist yet. `surface` names where the checkout was triggered from (e.g.
+ * 'refinement_gate', 'account_page') so conversion can be broken down per
+ * offer placement, not just totaled.
+ */
+export interface CheckoutStartedEvent {
+  type: 'checkout_started';
+  userId: string;
+  tierId: string;
+  surface: string;
+}
+
+/**
+ * Fires when a purchase actually completes — from the checkout-completed
+ * webhook (entitlement-webhook-handlers.ts, the same event that grants the
+ * entitlement), not from the checkout-session-creation step (a created
+ * session may never be paid). `amountCents` is the tier's real price at
+ * the time of purchase (tier-catalog.ts), not re-derived later — a price
+ * change after the fact must never retroactively change historical revenue.
+ */
+export interface PurchaseCompletedEvent {
+  type: 'purchase_completed';
+  userId: string;
+  tierId: string;
+  amountCents: number;
+}
+
 export type AnalyticsEvent =
   | PhaseEnteredEvent
   | RefinementUsedEvent
@@ -121,7 +153,9 @@ export type AnalyticsEvent =
   | GateShownEvent
   | BuildFailedEvent
   | BuildSucceededEvent
-  | DataExportRequestedEvent;
+  | DataExportRequestedEvent
+  | CheckoutStartedEvent
+  | PurchaseCompletedEvent;
 
 export interface AnalyticsLogger {
   info(obj: Record<string, unknown>, msg?: string): void;

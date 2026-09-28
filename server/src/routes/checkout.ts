@@ -7,9 +7,12 @@ import {
   type CheckoutSessionResult,
   type createCheckoutSessionTool,
 } from '../stripe-checkout.js';
+import { emitAnalyticsEvent, type AnalyticsLogger } from '../analytics.js';
 
 const checkoutSchema = z.object({
   tierId: z.string().trim().min(1),
+  /** Where the checkout was triggered from (Epic 6.11, #108's "offer->purchase conversion per surface") — e.g. 'refinement_gate', 'account_page'. Defaults to 'unknown' for callers that don't pass it. */
+  surface: z.string().trim().min(1).default('unknown'),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),
 });
@@ -32,6 +35,7 @@ export function registerCheckoutRoutes(
   app: FastifyInstance,
   authStore: AuthStore,
   checkoutTool: ReturnType<typeof createCheckoutSessionTool>,
+  analyticsLogger: AnalyticsLogger,
 ) {
   const auth = requireAuth(authStore);
 
@@ -57,6 +61,13 @@ export function registerCheckoutRoutes(
     if (isCheckoutSessionFailure(result)) {
       return reply.status(ERROR_STATUS[result.error]).send(result);
     }
+
+    emitAnalyticsEvent(analyticsLogger, {
+      type: 'checkout_started',
+      userId: request.userId!,
+      tierId: parsed.data.tierId,
+      surface: parsed.data.surface,
+    });
 
     return reply.status(200).send(result);
   });

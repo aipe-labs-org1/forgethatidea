@@ -1,6 +1,7 @@
-import { isTierId, type TierId } from './tier-catalog.js';
+import { isTierId, type TierId, type TierProduct } from './tier-catalog.js';
 import type { createEntitlementsService } from './entitlements.js';
 import type { StripeEventHandler } from './stripe-event-processor.js';
+import { emitAnalyticsEvent, type AnalyticsLogger } from './analytics.js';
 
 export interface EntitlementSharingAnomaly {
   userId: string;
@@ -13,6 +14,10 @@ export interface EntitlementWebhookHandlersDeps {
   entitlements: ReturnType<typeof createEntitlementsService>;
   /** Called when the same buyer email has been granted the same tier under more than one account (Epic 6.10, #107) — e.g. a Slack post, a metric increment. Optional so existing callers/tests that never exercise the gated path don't need one. */
   alertOnAnomaly?: (anomaly: EntitlementSharingAnomaly) => void;
+  /** The tier catalog (#97) — used only to look up the real price at grant time for the purchase_completed analytics event (Epic 6.11, #108). Optional so existing callers/tests that don't care about revenue analytics don't need one. */
+  catalog?: TierProduct[];
+  /** Where purchase_completed is emitted (Epic 6.11, #108) — optional alongside `catalog` for the same reason. */
+  analyticsLogger?: AnalyticsLogger;
 }
 
 function readBuyerEmail(object: Record<string, unknown>): string | undefined {
@@ -49,7 +54,7 @@ function readMetadata(object: Record<string, unknown>): { userId: string; tierId
 export function createEntitlementWebhookHandlers(
   deps: EntitlementWebhookHandlersDeps,
 ): Record<string, StripeEventHandler> {
-  const { entitlements, alertOnAnomaly } = deps;
+  const { entitlements, alertOnAnomaly, catalog, analyticsLogger } = deps;
 
   return {
     'checkout.session.completed': async (object) => {
@@ -68,6 +73,22 @@ export function createEntitlementWebhookHandlers(
           : String(object.id);
       const buyerEmail = readBuyerEmail(object);
       await entitlements.grant(userId, tierId, { source: 'purchase', reference, buyerEmail });
+
+      // Revenue analytics (Epic 6.11, #108): the price at the moment of
+      // grant, from the shared catalog (#97) — never re-derived later, so
+      // a subsequent price change can't retroactively rewrite historical
+      // revenue.
+      if (catalog && analyticsLogger) {
+        const product = catalog.find((p) => p.id === tierId);
+        if (product) {
+          emitAnalyticsEvent(analyticsLogger, {
+            type: 'purchase_completed',
+            userId,
+            tierId,
+            amountCents: product.priceCents,
+          });
+        }
+      }
 
       // Duplicate-account entitlement sharing (Epic 6.10, #107): flag,
       // never block — a false positive here (e.g. a shared family email)

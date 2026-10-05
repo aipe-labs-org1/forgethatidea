@@ -385,6 +385,16 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   const manifestStore =
     deps.manifestStore ?? (db ? createDbManifestStore(db) : createInMemoryManifestStore());
 
+  // Entitlements service (Epic 6.4): the single source of truth every gate
+  // queries — "does this user own this tier." Built unconditionally (not
+  // gated behind a real Stripe key) since admin overrides and gate checks
+  // need it regardless of whether real purchases are flowing yet. Built
+  // before the orchestrator (paid activity agents) and the checkout tool
+  // (purchase-price-honor guardrail, #110), which both read it.
+  const entitlementStore = deps.entitlementStore ?? createInMemoryEntitlementStore();
+  const entitlements = createEntitlementsService({ store: entitlementStore });
+  app.decorate('entitlements', entitlements);
+
   // Agent orchestrator (Epic 2): the real conversational loop tying the
   // system prompt (#30), tool dispatcher (#31), manifest tools (#33), and
   // cost guardrails (#0.11) together. Talks to Anthropic directly (not
@@ -404,6 +414,7 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
       analyticsLogger,
       logger: app.log,
       refinementLimits,
+      hasEntitlement: (userId, tierId) => entitlements.hasEntitlement(userId, tierId),
     });
     registerAgentRoutes(app, authStore, sessionStore, orchestrator);
   }
@@ -494,16 +505,6 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
       maxAttempts: env.PURCHASE_VELOCITY_MAX_ATTEMPTS,
       windowMs: env.PURCHASE_VELOCITY_WINDOW_MS,
     });
-
-  // Entitlements service (Epic 6.4): the single source of truth every gate
-  // queries — "does this user own this tier." Built unconditionally (not
-  // gated behind a real Stripe key) since admin overrides and future gate
-  // checks need it regardless of whether real purchases are flowing yet.
-  // Built before the checkout tool below since it needs entitlements for
-  // the purchase-price-honor guardrail (#110).
-  const entitlementStore = deps.entitlementStore ?? createInMemoryEntitlementStore();
-  const entitlements = createEntitlementsService({ store: entitlementStore });
-  app.decorate('entitlements', entitlements);
 
   const checkoutTool = createCheckoutSessionTool({
     client: stripeClient,

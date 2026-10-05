@@ -15,7 +15,15 @@ export interface ModuleToolDeps {
   sessionStore: SessionStore;
   manifestStore: ManifestStore;
   sessionId: string;
+  userId: string;
   onEvent: (event: TurnEvent) => void;
+  /** Paid-tier check (entitlements service, #100). Absent means no paid module can run. */
+  hasEntitlement?: (userId: string, tierId: string) => Promise<boolean>;
+}
+
+export interface ModuleToolSchema {
+  description: string;
+  inputSchema: Record<string, unknown>;
 }
 
 /**
@@ -39,4 +47,6 @@ export interface AgentModule {
   getTools(deps: ModuleToolDeps): ToolRegistry;
   /** Whether this module is in play for the given session this turn. Spine modules key on `session.phase`; unlockable modules (Epic 6+) will key on `session.unlockedModules`. */
   isActive(session: SessionRecord): boolean;
+  /** Schemas for this module's own tools. Spine modules omit it — their schemas live in agent-orchestrator.ts. */
+  toolSchemas?(): Record<string, ModuleToolSchema>;
 }

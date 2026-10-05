@@ -71,6 +71,11 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
 
+  // Comma-separated emails that get every paid tier without purchasing
+  // (demo and internal QA accounts) — complimentary-access.ts. Read-time
+  // only; removing an email revokes access immediately.
+  COMPLIMENTARY_ACCESS_EMAILS: z.string().optional(),
+
   // Purchase velocity limit (Epic 6.10, #107): a basic payment-abuse guard
   // — at most N checkout-session attempts per user within the window,
   // catching a scripted card-testing pattern without affecting a normal

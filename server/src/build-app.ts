@@ -103,6 +103,7 @@ import {
 } from './entitlements.js';
 import { createEntitlementWebhookHandlers } from './entitlement-webhook-handlers.js';
 import { registerEntitlementsRoutes } from './routes/entitlements.js';
+import { parseComplimentaryEmails, withComplimentaryAccess } from './complimentary-access.js';
 import {
   createSubscriptionCancellationTool,
   createUnconfiguredSubscriptionCancelClient,
@@ -392,7 +393,13 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   // before the orchestrator (paid activity agents) and the checkout tool
   // (purchase-price-honor guardrail, #110), which both read it.
   const entitlementStore = deps.entitlementStore ?? createInMemoryEntitlementStore();
-  const entitlements = createEntitlementsService({ store: entitlementStore });
+  const entitlements = withComplimentaryAccess(
+    createEntitlementsService({ store: entitlementStore }),
+    {
+      emails: parseComplimentaryEmails(env.COMPLIMENTARY_ACCESS_EMAILS),
+      findUserById: (id) => authStore.findUserById(id),
+    },
+  );
   app.decorate('entitlements', entitlements);
 
   // Agent orchestrator (Epic 2): the real conversational loop tying the
@@ -415,6 +422,7 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
       logger: app.log,
       refinementLimits,
       hasEntitlement: (userId, tierId) => entitlements.hasEntitlement(userId, tierId),
+      tierCatalog: getTierCatalog(env),
     });
     registerAgentRoutes(app, authStore, sessionStore, orchestrator);
   }

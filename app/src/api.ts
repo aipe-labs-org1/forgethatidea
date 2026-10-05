@@ -494,12 +494,13 @@ export async function createCheckoutSession(
   tierId: TierId,
   successUrl: string,
   cancelUrl: string,
+  surface?: string,
 ): Promise<CreateCheckoutSessionResponse> {
   const res = await fetch('/api/checkout', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tierId, successUrl, cancelUrl }),
+    body: JSON.stringify({ tierId, successUrl, cancelUrl, surface }),
   });
   return res.json();
 }

@@ -28,6 +28,7 @@ import type { ChatMessage } from './chat-message.js';
 import type { AgentModule, ModuleToolSchema } from './agents/module-types.js';
 import { assembleActiveModules } from './agents/module-registry.js';
 import { ADVISOR_MODULES } from './agents/advisor-roster.js';
+import type { TierProduct } from './tier-catalog.js';
 
 export interface OrchestratorAnthropicClient {
   streamMessage(
@@ -77,6 +78,8 @@ export interface AgentOrchestratorDeps {
   modules?: AgentModule[];
   /** Paid-tier check for gated agents (entitlements service, #100). Absent means paid agents always refuse. */
   hasEntitlement?: (userId: string, tierId: string) => Promise<boolean>;
+  /** Paid tier names/prices (#97), shown on paywall cards when a paid agent is refused. */
+  tierCatalog?: TierProduct[];
 }
 
 export interface HandleTurnSuccess {
@@ -516,6 +519,7 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
           userId,
           onEvent: (event) => events.push(event),
           hasEntitlement: deps.hasEntitlement,
+          getTierProduct: (tierId) => deps.tierCatalog?.find((p) => p.id === tierId),
         }),
       );
       Object.assign(moduleSchemas, module.toolSchemas?.() ?? {});

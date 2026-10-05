@@ -45,7 +45,12 @@ import {
 import { BuildOptionsCard } from './components/BuildOptionsCard.js';
 import { ArchitectureCard } from './components/ArchitectureCard.js';
 import { AdvisorCard } from './components/AdvisorCard.js';
-import { isAdvisorContent, type AdvisorCardContent } from './components/advisor-content.js';
+import {
+  isAdvisorContent,
+  isPaywallContent,
+  type AdvisorCardContent,
+} from './components/advisor-content.js';
+import { PaywallCard } from './components/PaywallCard.js';
 import { CostTableCard } from './components/CostTableCard.js';
 import { MarketingPlansCard } from './components/MarketingPlansCard.js';
 import { ConfirmBuildGate } from './components/ConfirmBuildGate.js';
@@ -582,7 +587,9 @@ export function App() {
 
   const sessionId = sessionState.session.id;
   const readyToBuild = phase === 'build' || phase === 'refine';
-  const advisorCards = cards.filter((card) => isAdvisorContent(card.content));
+  const advisorCards = cards.filter(
+    (card) => isAdvisorContent(card.content) || isPaywallContent(card.content),
+  );
 
   return (
     <AppShell
@@ -623,15 +630,24 @@ export function App() {
             />
             {advisorCards.length > 0 && (
               <div className="advisor-stack" aria-label="Agent deliverables">
-                {advisorCards.map((card, i) => (
-                  <AdvisorCard
-                    key={card.id}
-                    index={i + 1}
-                    status={card.status}
-                    content={card.content as AdvisorCardContent}
-                    accent="success"
-                  />
-                ))}
+                {advisorCards.map((card, i) =>
+                  isPaywallContent(card.content) ? (
+                    <PaywallCard
+                      key={card.id}
+                      index={i + 1}
+                      content={card.content}
+                      sessionId={sessionId}
+                    />
+                  ) : (
+                    <AdvisorCard
+                      key={card.id}
+                      index={i + 1}
+                      status={card.status}
+                      content={card.content as AdvisorCardContent}
+                      accent="success"
+                    />
+                  ),
+                )}
               </div>
             )}
           </>

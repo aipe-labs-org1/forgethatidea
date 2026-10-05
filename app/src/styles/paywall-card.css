@@ -1,0 +1,31 @@
+/* Unlock card left by a paid agent the user doesn't own yet. */
+
+.paywall-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--forge-space-2);
+}
+
+.paywall-card p {
+  margin: 0;
+}
+
+.paywall-card__lead {
+  color: var(--forge-slate-100);
+}
+
+.paywall-card__price {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--forge-signal-amber);
+}
+
+.paywall-card__description {
+  color: var(--forge-slate-300);
+}
+
+.paywall-card__error {
+  color: var(--forge-slate-300);
+  font-size: 0.9rem;
+}

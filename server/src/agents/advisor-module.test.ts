@@ -128,7 +128,8 @@ describe('createAdvisorModule (build-agents)', () => {
     const result = await module.getTools(deps)['render_pitch_deck']!(VALID_INPUT);
 
     expect(result).toMatchObject({ ok: false, error: 'not_entitled', tierId: 'pitch-deck' });
-    expect((await sessionStore.get(sessionId))!.cards as SessionCard[]).toHaveLength(0);
+    const types = ((await sessionStore.get(sessionId))!.cards as SessionCard[]).map((c) => c.type);
+    expect(types).not.toContain('pitch-deck');
   });
 
   it('allows a paid agent once the user owns its tier', async () => {
@@ -147,5 +148,58 @@ describe('createAdvisorModule (build-agents)', () => {
     expect(prompt).toContain('render_pitch_deck');
     expect(prompt).toContain('channels');
     expect(prompt).toMatch(/paid/i);
+  });
+});
+
+describe('paywall card for paid agents', () => {
+  const getTierProduct = (tierId: string) =>
+    tierId === 'pitch-deck'
+      ? { name: 'Pitch Deck', description: 'Investor deck from your plan.', priceCents: 2900 }
+      : undefined;
+
+  it('puts an unlock card for the tier on the canvas when the user is not entitled', async () => {
+    const module = createAdvisorModule(PAID_SPEC);
+    const { sessionStore, sessionId, deps, onEvent } = await setup('refine', async () => false);
+    await module.getTools({ ...deps, getTierProduct })['render_pitch_deck']!(VALID_INPUT);
+
+    const cards = (await sessionStore.get(sessionId))!.cards as SessionCard[];
+    expect(cards).toEqual([
+      expect.objectContaining({
+        type: 'paywall:pitch-deck',
+        content: {
+          kind: 'paywall',
+          tierId: 'pitch-deck',
+          agentLabel: 'Pitch deck',
+          tierName: 'Pitch Deck',
+          description: 'Investor deck from your plan.',
+          priceCents: 2900,
+        },
+      }),
+    ]);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'card_emitted', cardType: 'paywall:pitch-deck' }),
+    );
+  });
+
+  it('does not duplicate the unlock card on repeated refusals', async () => {
+    const module = createAdvisorModule(PAID_SPEC);
+    const { sessionStore, sessionId, deps } = await setup('refine', async () => false);
+    const tool = module.getTools({ ...deps, getTierProduct })['render_pitch_deck']!;
+    await tool(VALID_INPUT);
+    await tool(VALID_INPUT);
+    expect((await sessionStore.get(sessionId))!.cards as SessionCard[]).toHaveLength(1);
+  });
+
+  it('removes the unlock card once the tier is owned and the agent renders', async () => {
+    const module = createAdvisorModule(PAID_SPEC);
+    let owned = false;
+    const { sessionStore, sessionId, deps } = await setup('refine', async () => owned);
+    const tool = module.getTools({ ...deps, getTierProduct })['render_pitch_deck']!;
+    await tool(VALID_INPUT);
+    owned = true;
+    await tool(VALID_INPUT);
+
+    const types = ((await sessionStore.get(sessionId))!.cards as SessionCard[]).map((c) => c.type);
+    expect(types).toEqual(['pitch-deck']);
   });
 });

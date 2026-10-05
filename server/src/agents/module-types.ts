@@ -19,6 +19,10 @@ export interface ModuleToolDeps {
   onEvent: (event: TurnEvent) => void;
   /** Paid-tier check (entitlements service, #100). Absent means no paid module can run. */
   hasEntitlement?: (userId: string, tierId: string) => Promise<boolean>;
+  /** Name, copy and price for a paid tier (tier catalog, #97) — shown on the paywall card. */
+  getTierProduct?: (
+    tierId: string,
+  ) => { name: string; description: string; priceCents: number } | undefined;
 }
 
 export interface ModuleToolSchema {

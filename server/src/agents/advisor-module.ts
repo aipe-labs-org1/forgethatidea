@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PHASES, type Phase } from '@forge/shared';
-import type { AgentModule, ModuleToolSchema } from './module-types.js';
+import type { AgentModule, ModuleToolDeps, ModuleToolSchema } from './module-types.js';
 import type { SessionCard } from '../phase-gates.js';
 import type { TierId } from '../tier-catalog.js';
 
@@ -191,6 +191,57 @@ function buildInputSchema(spec: AdvisorSpec): Record<string, unknown> {
   };
 }
 
+export interface PaywallCardContent {
+  kind: 'paywall';
+  tierId: TierId;
+  agentLabel: string;
+  tierName: string;
+  description: string;
+  priceCents: number | null;
+}
+
+export function paywallCardType(tierId: TierId): string {
+  return `paywall:${tierId}`;
+}
+
+/**
+ * Directs a user who isn't entitled to a paid agent to the paywall: one
+ * unlock card per tier on the canvas (re-refusals update it in place, never
+ * duplicate it), removed again once the agent renders for an owner.
+ */
+async function putPaywallCard(
+  spec: AdvisorSpec,
+  tierId: TierId,
+  deps: ModuleToolDeps,
+): Promise<void> {
+  const session = await deps.sessionStore.get(deps.sessionId);
+  if (!session) return;
+
+  const product = deps.getTierProduct?.(tierId);
+  const type = paywallCardType(tierId);
+  const existingCards = session.cards as SessionCard[];
+  const existing = existingCards.find((c) => c.type === type);
+  const card: SessionCard & { content: PaywallCardContent } = {
+    id: existing?.id ?? randomUUID(),
+    type,
+    status: 'draft',
+    content: {
+      kind: 'paywall',
+      tierId,
+      agentLabel: spec.label,
+      tierName: product?.name ?? spec.label,
+      description: product?.description ?? '',
+      priceCents: product?.priceCents ?? null,
+    },
+  };
+  const cards = existing
+    ? existingCards.map((c) => (c.type === type ? card : c))
+    : [...existingCards, card];
+
+  await deps.sessionStore.update(deps.sessionId, { cards });
+  deps.onEvent({ type: 'card_emitted', cardId: card.id, cardType: type });
+}
+
 /**
  * Builds an AgentModule for one advisor activity. Joins the turn once the
  * session reaches `minPhase`; a paid agent still joins (so it can explain
@@ -232,6 +283,7 @@ export function createAdvisorModule(spec: AdvisorSpec): AgentModule {
             ? await deps.hasEntitlement(deps.userId, spec.tierId)
             : false;
           if (!owned) {
+            await putPaywallCard(spec, spec.tierId, deps);
             return {
               ok: false,
               error: 'not_entitled',
@@ -257,9 +309,12 @@ export function createAdvisorModule(spec: AdvisorSpec): AgentModule {
           status: existing ? 'refined' : 'draft',
           content: (parsed as Extract<AdvisorValidation, { ok: true }>).content,
         };
-        const cards = existing
-          ? existingCards.map((c) => (c.type === spec.id ? card : c))
-          : [...existingCards, card];
+        const paywallType = spec.tierId ? paywallCardType(spec.tierId) : null;
+        const cards = (
+          existing
+            ? existingCards.map((c) => (c.type === spec.id ? card : c))
+            : [...existingCards, card]
+        ).filter((c) => c.type !== paywallType);
 
         await deps.sessionStore.update(deps.sessionId, { cards });
         deps.onEvent({ type: 'card_emitted', cardId: card.id, cardType: spec.id });

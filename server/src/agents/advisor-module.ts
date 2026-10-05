@@ -79,10 +79,22 @@ function isHttpUrl(value: unknown): boolean {
   }
 }
 
-function validate(
-  spec: AdvisorSpec,
-  input: unknown,
-): { ok: true; content: AdvisorCardContent } | { ok: false; details: string[] } {
+type AdvisorValidation =
+  | { ok: true; content: AdvisorCardContent }
+  | { ok: false; details: string[] };
+
+/**
+ * Explicit type guard rather than relying on inline `!result.ok` narrowing —
+ * this pattern has caused a Vercel-only build failure multiple times this
+ * project even when local tsc is clean on the same TypeScript version.
+ */
+function isAdvisorValidationFailure(
+  result: AdvisorValidation,
+): result is Extract<AdvisorValidation, { ok: false }> {
+  return result.ok === false;
+}
+
+function validate(spec: AdvisorSpec, input: unknown): AdvisorValidation {
   if (typeof input !== 'object' || input === null) {
     return { ok: false, details: ['input must be an object'] };
   }
@@ -230,7 +242,9 @@ export function createAdvisorModule(spec: AdvisorSpec): AgentModule {
         }
 
         const parsed = validate(spec, rawInput);
-        if (!parsed.ok) return { ok: false, error: 'invalid_input', details: parsed.details };
+        if (isAdvisorValidationFailure(parsed)) {
+          return { ok: false, error: 'invalid_input', details: parsed.details };
+        }
 
         const session = await deps.sessionStore.get(deps.sessionId);
         if (!session) return { ok: false, error: 'session_not_found' };
@@ -241,7 +255,7 @@ export function createAdvisorModule(spec: AdvisorSpec): AgentModule {
           id: existing?.id ?? randomUUID(),
           type: spec.id,
           status: existing ? 'refined' : 'draft',
-          content: parsed.content,
+          content: (parsed as Extract<AdvisorValidation, { ok: true }>).content,
         };
         const cards = existing
           ? existingCards.map((c) => (c.type === spec.id ? card : c))

@@ -903,3 +903,141 @@ describe('marketing refinement loop (#88)', () => {
     expect(updated!.marketingRefinementRounds).toBe(1);
   });
 });
+
+describe('agent modules working in tandem (build-agents.md)', () => {
+  function endTurn(text = 'ok') {
+    return {
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'end_turn' as const,
+      content: [{ type: 'text' as const, text }],
+    };
+  }
+
+  async function firstRequest(phase: 'onboarding' | 'planning' | 'refine') {
+    const anthropicClient = scriptedAnthropicClient([endTurn()]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await deps.sessionStore.update(session.id, { phase });
+    const orchestrator = createAgentOrchestrator(deps);
+    await orchestrator.handleTurn(session.id, 'user-1', 'hi');
+    const request = anthropicClient.streamMessage.mock.calls[0]![0] as unknown as {
+      system: string;
+      tools: { name: string; inputSchema: { type: string; required?: string[] } }[];
+    };
+    return request;
+  }
+
+  it('keeps advisor agents out of early phases', async () => {
+    const request = await firstRequest('onboarding');
+    const names = request.tools.map((t) => t.name);
+    expect(names).not.toContain('render_launch');
+    expect(names).not.toContain('render_data_protection');
+  });
+
+  it('adds planning-phase advisors (legal, deployment, paywall) alongside the spine tools', async () => {
+    const request = await firstRequest('planning');
+    const names = request.tools.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'render_architecture',
+        'render_data_protection',
+        'render_deployment',
+        'render_paywall_geo',
+      ]),
+    );
+    expect(names).not.toContain('render_launch');
+    expect(request.system).toContain('Data protection & filings agent');
+  });
+
+  it('runs every refine-phase agent together in one call, each with its own schema', async () => {
+    const request = await firstRequest('refine');
+    const names = request.tools.map((t) => t.name);
+    for (const tool of [
+      'render_launch',
+      'render_social_seo',
+      'render_spec_pack',
+      'render_epics_export',
+      'render_financial',
+      'render_funding',
+      'render_pitch_deck',
+    ]) {
+      expect(names).toContain(tool);
+    }
+    const launch = request.tools.find((t) => t.name === 'render_launch')!;
+    expect(launch.inputSchema.required).toEqual(['summary', 'sections']);
+    expect(request.system).toContain('Pitch deck agent');
+  });
+
+  it('lets a free advisor render a card through a real tool call, emitting card_emitted', async () => {
+    const anthropicClient = scriptedAnthropicClient([
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'tool_use',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'render_launch',
+            input: {
+              summary: 'Soft launch then Product Hunt.',
+              sections: [
+                { key: 'prelaunch', title: 'Pre-launch', body: 'Waitlist.' },
+                { key: 'launch_day', title: 'Launch', body: 'Product Hunt.' },
+                { key: 'first_30_days', title: 'First 30 days', body: 'Interviews.' },
+                { key: 'success_metrics', title: 'Success', body: '100 signups.' },
+              ],
+            },
+          },
+        ],
+      },
+      endTurn('Launch plan is on the canvas.'),
+    ]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await deps.sessionStore.update(session.id, { phase: 'refine' });
+
+    const result = await createAgentOrchestrator(deps).handleTurn(
+      session.id,
+      'user-1',
+      'plan launch',
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      events: [expect.objectContaining({ type: 'card_emitted', cardType: 'launch' })],
+    });
+  });
+
+  it('refuses a paid advisor without the tier, and allows it once owned', async () => {
+    const paidCall = {
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'tool_use' as const,
+      content: [
+        {
+          type: 'tool_use' as const,
+          id: 'toolu_1',
+          name: 'render_pitch_deck',
+          input: { summary: 'x', sections: [] },
+        },
+      ],
+    };
+    const anthropicClient = scriptedAnthropicClient([paidCall, endTurn()]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await deps.sessionStore.update(session.id, { phase: 'refine' });
+    const hasEntitlement = vi.fn(async () => false);
+
+    await createAgentOrchestrator({ ...deps, hasEntitlement }).handleTurn(
+      session.id,
+      'user-1',
+      'deck',
+    );
+
+    expect(hasEntitlement).toHaveBeenCalledWith('user-1', 'pitch-deck');
+    const toolResultTurn = anthropicClient.messagesReceived[1]!;
+    expect(JSON.stringify(toolResultTurn)).toContain('not_entitled');
+  });
+});

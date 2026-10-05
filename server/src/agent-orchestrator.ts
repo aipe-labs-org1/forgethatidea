@@ -25,6 +25,9 @@ import type { createCostGuard } from './cost-guard.js';
 import { CostCapExceededError } from './cost-guard.js';
 import { DEFAULT_PRICING, normalizeUsage } from './model-router.js';
 import type { ChatMessage } from './chat-message.js';
+import type { AgentModule, ModuleToolSchema } from './agents/module-types.js';
+import { assembleActiveModules } from './agents/module-registry.js';
+import { ADVISOR_MODULES } from './agents/advisor-roster.js';
 
 export interface OrchestratorAnthropicClient {
   streamMessage(
@@ -65,6 +68,15 @@ export interface AgentOrchestratorDeps {
    * need to pass one; build-app.ts wires the real Fastify logger.
    */
   logger?: Logger;
+  /**
+   * Activity agents (docs/build-agents.md) that join the turn alongside the
+   * spine phase tools — every active one contributes its own prompt block
+   * and tools to the same single model call. Defaults to the full advisor
+   * roster.
+   */
+  modules?: AgentModule[];
+  /** Paid-tier check for gated agents (entitlements service, #100). Absent means paid agents always refuse. */
+  hasEntitlement?: (userId: string, tierId: string) => Promise<boolean>;
 }
 
 export interface HandleTurnSuccess {
@@ -394,6 +406,7 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
   const keepRecentMessages = deps.keepRecentMessages ?? DEFAULT_KEEP_RECENT_MESSAGES;
   const analyticsLogger = deps.analyticsLogger ?? { info: () => {} };
   const logger = deps.logger ?? silentLogger();
+  const modules = deps.modules ?? ADVISOR_MODULES;
 
   async function handleTurn(
     sessionId: string,
@@ -487,25 +500,47 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
       refine_marketing_plans: marketingRefinementTool.refine_marketing_plans,
       ...deps.extraTools,
     };
+
+    // Activity agents (build-agents.md): every module active for this session
+    // adds its own tools and prompt block to this same call, so e.g. the
+    // launch, social and pitch-deck agents all answer within one turn.
+    const activeModules = assembleActiveModules(modules, session);
+    const moduleSchemas: Record<string, ModuleToolSchema> = {};
+    for (const module of activeModules) {
+      Object.assign(
+        toolRegistry,
+        module.getTools({
+          sessionStore,
+          manifestStore,
+          sessionId,
+          userId,
+          onEvent: (event) => events.push(event),
+          hasEntitlement: deps.hasEntitlement,
+        }),
+      );
+      Object.assign(moduleSchemas, module.toolSchemas?.() ?? {});
+    }
     const dispatcher = createToolDispatcher({ tools: toolRegistry, logger });
 
     const compactedHistory = compactChatHistory(session.chat as ChatMessage[], keepRecentMessages);
-    const system = buildSystemPrompt({ phase: session.phase });
+    const moduleGuidance = activeModules.map((m) => m.buildPrompt(session)).join('\n\n');
+    const system = moduleGuidance
+      ? `${buildSystemPrompt({ phase: session.phase })}\n\n# Activity agents active this turn\n\n${moduleGuidance}`
+      : buildSystemPrompt({ phase: session.phase });
     const messages: AnthropicMessageParam[] = [
       ...toAnthropicMessages(compactedHistory),
       { role: 'user', content: userMessage },
     ];
 
-    const tools = Object.keys(toolRegistry).map((name) => ({
-      name,
-      description:
-        BUILT_IN_TOOL_SCHEMAS[name as keyof typeof BUILT_IN_TOOL_SCHEMAS]?.description ??
-        `Tool: ${name}`,
-      inputSchema: BUILT_IN_TOOL_SCHEMAS[name as keyof typeof BUILT_IN_TOOL_SCHEMAS]
-        ?.inputSchema ?? {
-        type: 'object',
-      },
-    }));
+    const tools = Object.keys(toolRegistry).map((name) => {
+      const schema =
+        BUILT_IN_TOOL_SCHEMAS[name as keyof typeof BUILT_IN_TOOL_SCHEMAS] ?? moduleSchemas[name];
+      return {
+        name,
+        description: schema?.description ?? `Tool: ${name}`,
+        inputSchema: schema?.inputSchema ?? { type: 'object' },
+      };
+    });
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;

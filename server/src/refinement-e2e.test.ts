@@ -62,7 +62,7 @@ async function buildTestApp() {
   });
 
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, REFINEMENT_LIMITS);
+  registerSessionRoutes(app, authStore, sessionStore, REFINEMENT_LIMITS, manifestStore);
   registerRefineAppRoutes(app, authStore, sessionStore, refineAppOrchestrator, analyticsLogger);
   registerExportRoutes(
     app,

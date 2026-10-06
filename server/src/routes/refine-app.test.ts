@@ -8,6 +8,7 @@ import { createInMemoryAuthStore } from '../auth/auth-store.js';
 import { createInMemorySessionStore } from '../session-store.js';
 import { createInMemoryArtifactStore } from '../artifact-store.js';
 import { createRefineAppOrchestrator } from '../refine-app-orchestrator.js';
+import { createInMemoryManifestStore } from '../manifest-store.js';
 
 // Includes a minimal real error boundary (componentDidCatch) — required by
 // the missing_error_boundary contract rule (#80) for code to count as valid.
@@ -64,7 +65,13 @@ async function buildTestApp(anthropicClient = clientReturning(EDITED_CODE)) {
   });
 
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(
+    app,
+    authStore,
+    sessionStore,
+    { app: 3, marketing: 3 },
+    createInMemoryManifestStore(),
+  );
   registerRefineAppRoutes(app, authStore, sessionStore, orchestrator, analyticsLogger);
   await app.ready();
   return { app, sessionStore, artifactStore, analyticsLogger };

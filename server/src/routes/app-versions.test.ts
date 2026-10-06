@@ -7,6 +7,7 @@ import { registerAppVersionsRoutes } from './app-versions.js';
 import { createInMemoryAuthStore } from '../auth/auth-store.js';
 import { createInMemorySessionStore } from '../session-store.js';
 import { createInMemoryArtifactStore } from '../artifact-store.js';
+import { createInMemoryManifestStore } from '../manifest-store.js';
 
 async function buildTestApp() {
   const app = Fastify({ logger: false });
@@ -16,7 +17,13 @@ async function buildTestApp() {
   const artifactStore = createInMemoryArtifactStore();
 
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(
+    app,
+    authStore,
+    sessionStore,
+    { app: 3, marketing: 3 },
+    createInMemoryManifestStore(),
+  );
   registerAppVersionsRoutes(app, authStore, sessionStore, artifactStore);
   await app.ready();
   return { app, sessionStore, artifactStore };

@@ -290,7 +290,11 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
     app: env.FREE_APP_REFINEMENT_LIMIT,
     marketing: env.FREE_MARKETING_REFINEMENT_LIMIT,
   };
-  registerSessionRoutes(app, authStore, sessionStore, refinementLimits);
+  // Build manifest persistence (Epic 2.5/2.6). Same DB-backed-else-in-memory
+  // convention as every other store above.
+  const manifestStore =
+    deps.manifestStore ?? (db ? createDbManifestStore(db) : createInMemoryManifestStore());
+  registerSessionRoutes(app, authStore, sessionStore, refinementLimits, manifestStore);
   registerCardSelectionRoutes(app, authStore, sessionStore);
 
   // Anthropic Messages API wrapper (Epic 0.9). Only constructed when a key is
@@ -380,11 +384,6 @@ export function buildApp(env: Env = loadEnv(), deps: BuildAppDeps = {}): Fastify
   const pricingCatalog = createPricingCatalog({ client: pricingClient });
   app.decorate('pricingCatalog', pricingCatalog);
   const getPricingTiersTool = createGetPricingTiersTool({ catalog: pricingCatalog });
-
-  // Build manifest persistence (Epic 2.5/2.6). Same DB-backed-else-in-memory
-  // convention as every other store above.
-  const manifestStore =
-    deps.manifestStore ?? (db ? createDbManifestStore(db) : createInMemoryManifestStore());
 
   // Entitlements service (Epic 6.4): the single source of truth every gate
   // queries — "does this user own this tier." Built unconditionally (not

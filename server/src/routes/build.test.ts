@@ -70,7 +70,7 @@ async function buildTestApp() {
   });
 
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 }, manifestStore);
   registerBuildRoutes(app, authStore, sessionStore, orchestrator);
   await app.ready();
   return { app, authStore, sessionStore, manifestStore, artifactStore, anthropicClient };

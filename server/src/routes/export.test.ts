@@ -25,7 +25,7 @@ async function buildTestApp() {
   const analyticsLogger = silentLogger();
 
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 }, manifestStore);
   registerExportRoutes(
     app,
     authStore,

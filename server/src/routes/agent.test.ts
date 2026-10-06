@@ -46,7 +46,7 @@ async function buildTestApp() {
   // Session routes registered too, so tests can create a real session tied
   // to the signed-up user via the normal API rather than reaching into the
   // store directly with a made-up userId.
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 }, manifestStore);
   registerAgentRoutes(app, authStore, sessionStore, orchestrator);
   await app.ready();
   return { app, authStore, sessionStore, anthropicClient };

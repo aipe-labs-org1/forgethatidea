@@ -5,16 +5,32 @@ import { registerAuthRoutes } from './auth.js';
 import { registerSessionRoutes, isCardTamperAttempt } from './session.js';
 import { createInMemoryAuthStore } from '../auth/auth-store.js';
 import { createInMemorySessionStore } from '../session-store.js';
+import { createInMemoryManifestStore } from '../manifest-store.js';
+import type { BuildManifest } from '@forge/shared';
+
+const MANIFEST: BuildManifest = {
+  schemaVersion: 1,
+  productName: 'HabitLoop',
+  icp: 'people building daily habits',
+  entities: [{ name: 'Habit', fields: [{ name: 'title', type: 'string' }] }],
+  screens: [{ name: 'Habit list', purpose: 'see all habits' }],
+  roles: ['user'],
+  keyActions: ['create habit'],
+  branding: { accentColor: '#2E7D32', tone: 'encouraging' },
+  references: { researchCardIds: [] },
+  archetype: 'crud-tracker',
+};
 
 async function buildTestApp() {
   const app = Fastify({ logger: false });
   await app.register(cookie);
   const authStore = createInMemoryAuthStore();
   const sessionStore = createInMemorySessionStore();
+  const manifestStore = createInMemoryManifestStore();
   registerAuthRoutes(app, authStore);
-  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 });
+  registerSessionRoutes(app, authStore, sessionStore, { app: 3, marketing: 3 }, manifestStore);
   await app.ready();
-  return { app, authStore, sessionStore };
+  return { app, authStore, sessionStore, manifestStore };
 }
 
 function extractCookie(res: { headers: Record<string, unknown> }): string {
@@ -502,7 +518,7 @@ describe('PATCH /api/sessions/:id', () => {
   });
 
   it('allows entering build once all four required cards are genuinely locked server-side', async () => {
-    const { app, sessionStore } = await buildTestApp();
+    const { app, sessionStore, manifestStore } = await buildTestApp();
     const authCookie = await signUpAndGetCookie(app);
 
     const created = await app.inject({
@@ -532,6 +548,7 @@ describe('PATCH /api/sessions/:id', () => {
       status: 'locked',
     }));
     await sessionStore.update(sessionId, { cards: lockedCards });
+    await manifestStore.save(sessionId, MANIFEST);
 
     const res = await app.inject({
       method: 'PATCH',
@@ -542,6 +559,48 @@ describe('PATCH /api/sessions/:id', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ phase: 'build' });
+    // Confirming the build from the UI must freeze the manifest exactly like
+    // the agent's transition_phase tool does — otherwise the build route
+    // refuses with manifest_not_frozen (found in the production e2e run).
+    expect((await sessionStore.get(sessionId))!.frozenManifestVersion).toBe(1);
+    await app.close();
+  });
+
+  it('refuses to enter build when there is no manifest to freeze, leaving the phase unchanged', async () => {
+    const { app, sessionStore } = await buildTestApp();
+    const authCookie = await signUpAndGetCookie(app);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { cookie: authCookie },
+    });
+    const sessionId = created.json().id as string;
+    for (const phase of ['sources', 'brainstorm', 'planning']) {
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sessionId}`,
+        headers: { cookie: authCookie },
+        payload: { phase },
+      });
+    }
+    await sessionStore.update(sessionId, {
+      cards: ['options', 'architecture', 'cost', 'marketing'].map((type) => ({
+        id: `${type}-1`,
+        type,
+        status: 'locked',
+      })),
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/sessions/${sessionId}`,
+      headers: { cookie: authCookie },
+      payload: { phase: 'build' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'no_manifest_to_freeze' });
+    expect((await sessionStore.get(sessionId))!.phase).toBe('planning');
     await app.close();
   });
 
@@ -677,7 +736,7 @@ describe('GET /api/sessions/:id/gate', () => {
   });
 
   it('reports passed with no next phase for the terminal phase', async () => {
-    const { app, sessionStore } = await buildTestApp();
+    const { app, sessionStore, manifestStore } = await buildTestApp();
     const authCookie = await signUpAndGetCookie(app);
 
     const created = await app.inject({
@@ -702,6 +761,7 @@ describe('GET /api/sessions/:id/gate', () => {
     }
     // Seeded directly (#92: cards are never client-writable via PATCH).
     await sessionStore.update(sessionId, { cards: lockedCards });
+    await manifestStore.save(sessionId, MANIFEST);
     await app.inject({
       method: 'PATCH',
       url: `/api/sessions/${sessionId}`,

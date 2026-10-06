@@ -14,6 +14,8 @@ import {
 import { checkBrainstormStoppingRule } from '../brainstorm-logic.js';
 import { checkSourcesIntakeComplete } from '../sources-logic.js';
 import { emitAnalyticsEvent } from '../analytics.js';
+import type { ManifestStore } from '../manifest-store.js';
+import { freezeManifest, isFreezeManifestFailure } from '../manifest-freeze.js';
 
 // `cards` is deliberately NOT client-writable here (#92): every real card
 // mutation happens server-side, either via the render_* tool factories the
@@ -64,6 +66,7 @@ export function registerSessionRoutes(
   authStore: AuthStore,
   store: SessionStore,
   refinementLimits: RefinementLimits,
+  manifestStore: ManifestStore,
 ) {
   const auth = requireAuth(authStore);
 
@@ -180,6 +183,20 @@ export function registerSessionRoutes(
             to: parsed.data.phase,
             missing: gate.missing,
           });
+        }
+
+        // Confirming the build here (the UI's Confirm build button) must
+        // freeze the manifest exactly like the agent's transition_phase
+        // tool does, or the build route refuses with manifest_not_frozen.
+        if (parsed.data.phase === 'build') {
+          const frozen = await freezeManifest({
+            sessionStore: store,
+            manifestStore,
+            sessionId: request.params.id,
+          });
+          if (isFreezeManifestFailure(frozen)) {
+            return reply.status(409).send({ error: frozen.error });
+          }
         }
       }
 

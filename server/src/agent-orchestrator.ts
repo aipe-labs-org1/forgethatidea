@@ -115,7 +115,10 @@ export function isHandleTurnFailure(result: HandleTurnResult): result is HandleT
 }
 
 const DEFAULT_MODEL = 'claude-opus-5';
-const DEFAULT_MAX_TOKENS = 2048;
+// Agent cards (render_launch, render_pitch_deck, …) carry several prose
+// sections in one tool call; at 2048 the call was cut off mid-JSON in
+// production and arrived with only `summary`.
+const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 /** Matches env.ts's FREE_APP_REFINEMENT_LIMIT/FREE_MARKETING_REFINEMENT_LIMIT default. */
 const DEFAULT_REFINEMENT_LIMITS: RefinementLimits = { app: 3, marketing: 3 };
@@ -304,6 +307,15 @@ const BUILT_IN_TOOL_SCHEMAS = {
   lock_cost_table: {
     description: 'Lock in the current cost table once the user is happy with it.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  web_search: {
+    description:
+      'Search the live web for real competitors, prices, regulations and sources. Use it to ground any factual claim before citing it.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'The search query.' } },
+      required: ['query'],
+    },
   },
   get_pricing_tiers: {
     description:
@@ -582,9 +594,23 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
 
       messages.push({ role: 'assistant', content: result.content });
 
-      const toolResults = await Promise.all(
-        toolUseBlocks.map((block) => dispatcher.dispatch(block)),
-      );
+      // A response stopped by the output limit can end mid tool call — its
+      // input JSON is incomplete. Never run a tool on a partial input; tell
+      // the model plainly so it can retry with shorter content.
+      const truncated = result.stopReason === 'max_tokens';
+      const toolResults = truncated
+        ? toolUseBlocks.map((block) => ({
+            toolUseId: block.id,
+            isError: true,
+            content: {
+              ok: false,
+              error: 'output_truncated',
+              details: [
+                'Your response hit the output limit before this tool call finished, so it was not run. Call it again with shorter section text.',
+              ],
+            },
+          }))
+        : await Promise.all(toolUseBlocks.map((block) => dispatcher.dispatch(block)));
       const toolResultBlocks = toolResults.map((r) => ({
         type: 'tool_result' as const,
         tool_use_id: r.toolUseId,

@@ -1041,3 +1041,84 @@ describe('agent modules working in tandem (build-agents.md)', () => {
     expect(JSON.stringify(toolResultTurn)).toContain('not_entitled');
   });
 });
+
+describe('production e2e findings', () => {
+  it('advertises a real schema for web_search so the model sends {query}', async () => {
+    const anthropicClient = scriptedAnthropicClient([
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end_turn',
+        content: [{ type: 'text', text: 'ok' }],
+      },
+    ]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await createAgentOrchestrator({
+      ...deps,
+      extraTools: { web_search: vi.fn(async () => ({ results: [] })) },
+    }).handleTurn(session.id, 'user-1', 'hi');
+
+    const request = anthropicClient.streamMessage.mock.calls[0]![0] as unknown as {
+      tools: {
+        name: string;
+        inputSchema: { required?: string[]; properties?: Record<string, unknown> };
+      }[];
+    };
+    const webSearch = request.tools.find((t) => t.name === 'web_search')!;
+    expect(webSearch.inputSchema.required).toEqual(['query']);
+    expect(webSearch.inputSchema.properties).toHaveProperty('query');
+  });
+
+  it('gives the model enough output room for a full agent card', async () => {
+    const anthropicClient = scriptedAnthropicClient([
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end_turn',
+        content: [{ type: 'text', text: 'ok' }],
+      },
+    ]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await createAgentOrchestrator(deps).handleTurn(session.id, 'user-1', 'hi');
+
+    const request = anthropicClient.streamMessage.mock.calls[0]![0] as unknown as {
+      maxTokens: number;
+    };
+    expect(request.maxTokens).toBeGreaterThanOrEqual(8192);
+  });
+
+  it('never dispatches a tool call cut off by the output limit, and tells the model why', async () => {
+    const renderLaunch = vi.fn();
+    const anthropicClient = scriptedAnthropicClient([
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'max_tokens',
+        content: [
+          { type: 'tool_use', id: 'toolu_1', name: 'render_launch', input: { summary: 'partial' } },
+        ],
+      },
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end_turn',
+        content: [{ type: 'text', text: 'ok' }],
+      },
+    ]);
+    const deps = buildDeps(anthropicClient);
+    const session = await deps.sessionStore.create('user-1');
+    await deps.sessionStore.update(session.id, { phase: 'refine' });
+
+    await createAgentOrchestrator({
+      ...deps,
+      extraTools: { render_launch: renderLaunch },
+      modules: [],
+    }).handleTurn(session.id, 'user-1', 'launch');
+
+    expect(renderLaunch).not.toHaveBeenCalled();
+    const followUp = JSON.stringify(anthropicClient.messagesReceived[1]);
+    expect(followUp).toContain('output_truncated');
+  });
+});

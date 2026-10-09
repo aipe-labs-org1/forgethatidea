@@ -59,6 +59,12 @@ export interface StreamMessageRequest {
   messages: AnthropicMessageParam[];
   /** Tools the model may call this turn — omit for a plain text-only turn. */
   tools?: ToolDefinition[];
+  /**
+   * Thinking depth (output_config.effort). Claude Opus 5 thinks adaptively by
+   * default and thinking tokens count against maxTokens — lower effort leaves
+   * more of the budget for the actual answer. Omit for the model default.
+   */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 export interface StreamMessageHandlers {
@@ -101,6 +107,7 @@ export interface AnthropicSdkClient {
       system?: string;
       messages: AnthropicMessageParam[];
       tools?: SdkToolDefinition[];
+      output_config?: { effort: NonNullable<StreamMessageRequest['effort']> };
     }) => AsyncIterable<MessageStreamEvent> & {
       finalMessage: () => Promise<{
         id: string;
@@ -165,6 +172,7 @@ export function createAnthropicClient(deps: AnthropicClientDeps) {
               input_schema: tool.inputSchema,
             }),
           ),
+          ...(request.effort ? { output_config: { effort: request.effort } } : {}),
         });
 
         // Only text is accumulated from raw streamed events (for onText's

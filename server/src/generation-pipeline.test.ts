@@ -149,3 +149,30 @@ describe('generation timeout default (production e2e finding)', () => {
     expect(DEFAULT_GENERATION_TIMEOUT_MS).toBeLessThan(300_000);
   });
 });
+
+describe('codegen output budget (production e2e finding)', () => {
+  it('asks for low effort and a large output budget so thinking cannot starve the code', async () => {
+    const client = scriptedClient('export default function App() { return null; }');
+    await runGenerationPipeline({ spec: spec(), anthropicClient: client });
+    const request = client.streamMessage.mock.calls[0]![0] as {
+      maxTokens: number;
+      effort?: string;
+    };
+    expect(request.effort).toBe('low');
+    expect(request.maxTokens).toBeGreaterThanOrEqual(32_000);
+  });
+
+  it('reports a truncated response as a failure instead of passing cut-off code on', async () => {
+    const client = {
+      streamMessage: vi.fn(async () => ({
+        inputTokens: 100,
+        outputTokens: 32_000,
+        stopReason: 'max_tokens',
+        content: [{ type: 'text' as const, text: 'export default function App() { return (' }],
+      })),
+    };
+    const result = await runGenerationPipeline({ spec: spec(), anthropicClient: client });
+    expect(isGenerationFailure(result)).toBe(true);
+    if (isGenerationFailure(result)) expect(result.error).toBe('truncated');
+  });
+});

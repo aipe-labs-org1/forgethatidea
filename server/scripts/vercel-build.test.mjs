@@ -5,7 +5,7 @@ describe('vercel-build migration plan', () => {
   it('migrates before compiling on a production deploy', () => {
     expect(planBuild({ VERCEL_ENV: 'production', DATABASE_URL: 'postgres://x' })).toEqual([
       ['drizzle-kit', ['migrate']],
-      ['tsc', ['-p', 'tsconfig.json']],
+      ['turbo', ['run', 'build', '--filter=@forge/server']],
     ]);
   });
 
@@ -14,7 +14,9 @@ describe('vercel-build migration plan', () => {
   });
 
   it('only compiles on preview and local builds, which have no production database', () => {
-    expect(planBuild({ VERCEL_ENV: 'preview' })).toEqual([['tsc', ['-p', 'tsconfig.json']]]);
-    expect(planBuild({})).toEqual([['tsc', ['-p', 'tsconfig.json']]]);
+    expect(planBuild({ VERCEL_ENV: 'preview' })).toEqual([
+      ['turbo', ['run', 'build', '--filter=@forge/server']],
+    ]);
+    expect(planBuild({})).toEqual([['turbo', ['run', 'build', '--filter=@forge/server']]]);
   });
 });

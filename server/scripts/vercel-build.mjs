@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import console from 'node:console';
 
-const COMPILE = ['tsc', ['-p', 'tsconfig.json']];
+// Through turbo, as Vercel's own Turborepo detection does, so @forge/shared
+// is built before the server compiles against it.
+const COMPILE = ['turbo', ['run', 'build', '--filter=@forge/server']];
 
 export function planBuild(env) {
   if (env.VERCEL_ENV !== 'production') return [COMPILE];

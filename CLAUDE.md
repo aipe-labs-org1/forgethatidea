@@ -64,4 +64,6 @@ This isn't stylistic — Vercel's separate tsc pass has repeatedly failed to nar
 
 ## Deploys
 
+**Database migrations run on every production deploy.** `server/package.json`'s `vercel-build` script (`server/scripts/vercel-build.mjs`) runs `drizzle-kit migrate` before compiling when `VERCEL_ENV=production`, and fails the build if `DATABASE_URL` is missing — a failed migration blocks the deploy and leaves the previous one live. Preview builds only compile. Before this, migrations were applied by hand and 0008/0009 were silently never run in production. So: commit generated migrations (`pnpm --filter @forge/server db:generate`) with the schema change; never edit an already-applied migration.
+
 `forge-app` and `forge-server` are separate Vercel projects, deployed independently on merge to `main`. `app/vercel.json` proxies `/api/:path*` and `/health` to the deployed `forge-server` URL — the two must both be current for the app to work end to end. After merging a server-affecting PR, confirm the new deployment is actually live (`vercel ls`, or poll `gh api repos/<owner>/<repo>/deployments` for the merge commit's sha under `Production – forge-server`, then hit `/health`) before telling anyone a fix has shipped — a merge to `main` does not mean the fix is live yet.

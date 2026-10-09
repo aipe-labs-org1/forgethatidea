@@ -80,12 +80,20 @@ export function createInMemoryAnalyticsStore(): AnalyticsStore {
  */
 export function createPersistingAnalyticsLogger(
   store: AnalyticsStore,
-  baseLogger: AnalyticsLogger,
+  baseLogger: AnalyticsLogger & { error?: (obj: Record<string, unknown>, msg?: string) => void },
 ): AnalyticsLogger {
   return {
     info(obj, msg) {
       if (obj && (obj as Record<string, unknown>).analytics_event === true) {
-        void store.record(obj as Record<string, unknown>);
+        // Fire-and-forget, but never unhandled: an unhandled rejection
+        // exits the Node process, which in production killed the server
+        // instance mid-request on every analytics write.
+        store.record(obj as Record<string, unknown>).catch((err: unknown) => {
+          baseLogger.error?.(
+            { eventType: (obj as Record<string, unknown>).type, err },
+            'analytics event could not be persisted',
+          );
+        });
       }
       baseLogger.info(obj, msg);
     },

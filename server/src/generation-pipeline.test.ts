@@ -141,3 +141,11 @@ describe('runGenerationPipeline (#65)', () => {
     expect(sentPrompt).toContain('forbidden_localStorage');
   });
 });
+
+describe('generation timeout default (production e2e finding)', () => {
+  it('allows a full app generation to finish but stays inside the 300s function limit', async () => {
+    const { DEFAULT_GENERATION_TIMEOUT_MS } = await import('./generation-pipeline.js');
+    expect(DEFAULT_GENERATION_TIMEOUT_MS).toBeGreaterThanOrEqual(240_000);
+    expect(DEFAULT_GENERATION_TIMEOUT_MS).toBeLessThan(300_000);
+  });
+});

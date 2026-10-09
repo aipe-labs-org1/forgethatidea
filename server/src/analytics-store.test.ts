@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createInMemoryAnalyticsStore,
   createPersistingAnalyticsLogger,
@@ -6,6 +6,32 @@ import {
   queryBuildFailureReport,
   queryRevenueReport,
 } from './analytics-store.js';
+
+describe('createPersistingAnalyticsLogger — failure isolation', () => {
+  it('never lets a failed analytics write become an unhandled rejection (it crashed prod)', async () => {
+    const failingStore = {
+      record: vi.fn(async () => {
+        throw new Error('relation "analytics_events" does not exist');
+      }),
+      listAll: vi.fn(async () => []),
+    };
+    const base = { info: vi.fn(), error: vi.fn() };
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const logger = createPersistingAnalyticsLogger(failingStore, base);
+    logger.info({ analytics_event: true, type: 'content_screened', sessionId: 's-1' }, 'x');
+    await new Promise((r) => setTimeout(r, 20));
+    process.off('unhandledRejection', unhandled);
+
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(base.info).toHaveBeenCalled();
+    expect(base.error).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'content_screened' }),
+      'analytics event could not be persisted',
+    );
+  });
+});
 
 describe('createPersistingAnalyticsLogger (#95)', () => {
   it('persists every event to the store and still forwards to the base logger', () => {

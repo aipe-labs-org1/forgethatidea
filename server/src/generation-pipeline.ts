@@ -69,7 +69,10 @@ export function isGenerationFailure(result: GenerationResult): result is Generat
 
 const DEFAULT_MODEL = 'claude-opus-5';
 const DEFAULT_MAX_TOKENS = 8192;
-const DEFAULT_TIMEOUT_MS = 120_000;
+// A full app generation (up to 8192 output tokens) took longer than 120s in
+// production and failed every build; 240s leaves headroom under Vercel's
+// 300s function limit for the rest of the build request.
+export const DEFAULT_GENERATION_TIMEOUT_MS = 240_000;
 
 /**
  * Wraps the base generation prompt with the exact validation errors (#66)
@@ -127,7 +130,7 @@ export async function runGenerationPipeline(
   const { spec, anthropicClient } = input;
   const model = input.model ?? DEFAULT_MODEL;
   const maxTokens = input.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_GENERATION_TIMEOUT_MS;
 
   const basePrompt = buildCodegenPrompt({
     manifest: specToPromptManifest(spec),

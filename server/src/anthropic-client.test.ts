@@ -368,3 +368,33 @@ describe('createAnthropicClient', () => {
 function silentLogger() {
   return { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
 }
+
+describe('effort control', () => {
+  it('sends output_config.effort when an effort is requested', async () => {
+    const sdk = fakeSdkClient([]);
+    const client = createAnthropicClient({ sdkClient: sdk as never, logger: silentLogger() });
+    await client.streamMessage(
+      {
+        model: 'claude-opus-5',
+        maxTokens: 100,
+        effort: 'low',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      {},
+    );
+    expect(sdk.messages.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ output_config: { effort: 'low' } }),
+    );
+  });
+
+  it('omits output_config when no effort is requested', async () => {
+    const sdk = fakeSdkClient([]);
+    const client = createAnthropicClient({ sdkClient: sdk as never, logger: silentLogger() });
+    await client.streamMessage(
+      { model: 'claude-opus-5', maxTokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+      {},
+    );
+    const params = (sdk.messages.stream.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(params).not.toHaveProperty('output_config');
+  });
+});

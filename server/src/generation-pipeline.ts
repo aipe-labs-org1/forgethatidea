@@ -53,7 +53,7 @@ export interface GenerationSuccess {
 
 export interface GenerationFailure {
   ok: false;
-  error: 'model_error' | 'timeout' | 'empty_response';
+  error: 'model_error' | 'timeout' | 'empty_response' | 'truncated';
 }
 
 export type GenerationResult = GenerationSuccess | GenerationFailure;
@@ -68,7 +68,11 @@ export function isGenerationFailure(result: GenerationResult): result is Generat
 }
 
 const DEFAULT_MODEL = 'claude-opus-5';
-const DEFAULT_MAX_TOKENS = 8192;
+// Claude Opus 5 thinks by default and thinking counts against max_tokens: at
+// 8192 a production build spent the whole budget and returned no code. Low
+// effort keeps thinking short; 32k leaves room for a full single-file app.
+const DEFAULT_MAX_TOKENS = 32_000;
+const CODEGEN_EFFORT = 'low' as const;
 // A full app generation (up to 8192 output tokens) took longer than 120s in
 // production and failed every build; 240s leaves headroom under Vercel's
 // 300s function limit for the rest of the build request.
@@ -144,7 +148,12 @@ export async function runGenerationPipeline(
   try {
     result = await withTimeout(
       anthropicClient.streamMessage(
-        { model, maxTokens, messages: [{ role: 'user', content: prompt }] },
+        {
+          model,
+          maxTokens,
+          effort: CODEGEN_EFFORT,
+          messages: [{ role: 'user', content: prompt }],
+        },
         { onText: input.onProgress },
       ),
       timeoutMs,
@@ -163,6 +172,12 @@ export async function runGenerationPipeline(
 
   if (!code.trim()) {
     return { ok: false, error: 'empty_response' };
+  }
+
+  // Hitting the output limit means the file is cut off mid-way — never hand
+  // partial code to validation/repair as if it were a complete attempt.
+  if (result.stopReason === 'max_tokens') {
+    return { ok: false, error: 'truncated' };
   }
 
   const costCents = normalizeUsage(DEFAULT_PRICING, 'anthropic', model, {

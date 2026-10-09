@@ -163,3 +163,27 @@ describe('runDiffEdit (#76)', () => {
     }
   });
 });
+
+describe('diff-edit output budget (production e2e finding)', () => {
+  it('asks for low effort and a large output budget for the full-file rewrite', async () => {
+    const client = {
+      streamMessage: vi.fn(async () => ({
+        inputTokens: 10,
+        outputTokens: 20,
+        stopReason: 'end_turn',
+        content: [{ type: 'text' as const, text: VALID_EDITED_CODE }],
+      })),
+    };
+    await runDiffEdit({
+      currentCode: CURRENT_CODE,
+      changeRequest: 'Add a label.',
+      anthropicClient: client,
+    });
+    const request = (client.streamMessage.mock.calls[0] as unknown[])[0] as {
+      maxTokens: number;
+      effort?: string;
+    };
+    expect(request.effort).toBe('low');
+    expect(request.maxTokens).toBeGreaterThanOrEqual(32_000);
+  });
+});

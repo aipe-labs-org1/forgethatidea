@@ -108,7 +108,9 @@ export function isDiffEditFailure(result: DiffEditResult): result is DiffEditFai
 }
 
 const DEFAULT_MODEL = 'claude-opus-5';
-const DEFAULT_MAX_TOKENS = 8192;
+// Same budget as app generation (generation-pipeline.ts): the edit returns
+// the whole file, and Claude Opus 5's default thinking counts against it.
+const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_MAX_REPAIR_ROUNDS = 2;
 
 /**
@@ -137,7 +139,7 @@ export async function runDiffEdit(input: RunDiffEditInput): Promise<DiffEditResu
     let result;
     try {
       result = await anthropicClient.streamMessage(
-        { model, maxTokens, messages: [{ role: 'user', content: prompt }] },
+        { model, maxTokens, effort: 'low', messages: [{ role: 'user', content: prompt }] },
         {},
       );
     } catch {
